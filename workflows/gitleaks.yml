@@ -1,0 +1,16 @@
+
+name: Gitleaks
+on: { workflow_call: {} }
+permissions: { contents: read, security-events: write }
+jobs:
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect --no-git --redact --report-format sarif --report-path gitleaks.sarif
+      - uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: gitleaks.sarif }
