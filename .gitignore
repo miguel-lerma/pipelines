@@ -1,0 +1,125 @@
+########################################
+# SO / editores
+########################################
+# macOS
+.DS_Store
+**/.DS_Store
+.AppleDouble
+.LSOverride
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+# Linux
+*~
+# Vim/Neovim
+*.swp
+*.swo
+# JetBrains
+.idea/
+*.iml
+# VS Code (ajusta si compartes settings)
+.vscode/
+.history/
+
+########################################
+# Node / Frontend
+########################################
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.parcel-cache/
+.next/
+.nuxt/
+.out/
+out/
+dist/
+build/
+.eslintcache
+.stylelintcache
+.nyc_output/
+coverage/
+.turbo/
+.tmp/
+.sass-cache/
+.browserslistrc.cjs
+# Lockfiles se deben versionar normalmente:
+# !package-lock.json
+# !yarn.lock
+# !pnpm-lock.yaml
+
+########################################
+# Java / Maven / Gradle
+########################################
+target/
+*.class
+*.log
+# Gradle
+.gradle/
+build/
+# Eclipse
+.project
+.classpath
+.settings/
+
+########################################
+# .NET
+########################################
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+########################################
+# Python (por si hay scripts)
+########################################
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.coverage
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+########################################
+# Terraform
+########################################
+.terraform/
+terraform.tfstate*
+crash.log
+*.tfvars
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+########################################
+# Docker / contenedores
+########################################
+# Evita subir secretos locales
+.env
+.env.*
+!.env.example
+docker-compose.override.yml
+
+########################################
+# Kubernetes / certificados (ajusta a tu flujo)
+########################################
+*.crt
+*.key
+*.pem
+
+########################################
+# Logs / temporales
+########################################
+logs/
+*.log
+log/
+tmp/
+temp/
+.cache/
