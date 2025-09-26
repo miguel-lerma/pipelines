@@ -1,11 +1,19 @@
-
 name: CodeQL (warning-only)
 on:
   workflow_call:
     inputs:
-      language: { type: string, required: true }   # java|javascript-typescript|csharp
-      mode: { type: string, default: 'warning' }   # warning|enforce
-permissions: { actions: read, contents: read, security-events: write }
+      language:
+        type: string
+        required: true  # java | javascript-typescript | csharp
+      mode:
+        type: string
+        default: 'warning'  # warning|enforce
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
 jobs:
   codeql:
     name: CodeQL (warning-only)
@@ -13,7 +21,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: github/codeql-action/init@v3
-        with: { languages: ${{ inputs.language }} }
+        with:
+          languages: ${{ inputs.language }}
       - uses: github/codeql-action/autobuild@v3
       - uses: github/codeql-action/analyze@v3
     continue-on-error: ${{ inputs.mode == 'warning' }}

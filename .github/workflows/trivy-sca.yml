@@ -1,13 +1,25 @@
-
 name: Trivy SCA
 on:
   workflow_call:
     inputs:
-      app_dir: { type: string, required: false }
-      severity: { type: string, default: 'HIGH,CRITICAL' }
-      ignore_unfixed: { type: string, default: 'true' }
-      fail_on_findings: { type: string, default: 'true' }
-permissions: { contents: read, security-events: write }
+      app_dir:
+        type: string
+        required: false
+        default: '.'
+      severity:
+        type: string
+        default: 'HIGH,CRITICAL'
+      ignore_unfixed:
+        type: string
+        default: 'true'
+      fail_on_findings:
+        type: string
+        default: 'true'
+
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   sca:
     name: Trivy SCA
@@ -20,11 +32,15 @@ jobs:
           scanners: vuln
           format: sarif
           output: trivy.sarif
-          working-directory: ${{ inputs.app_dir || '.' }}
+          working-directory: ${{ inputs.app_dir }}
           severity: ${{ inputs.severity }}
           ignore-unfixed: ${{ inputs.ignore_unfixed }}
       - uses: github/codeql-action/upload-sarif@v3
-        with: { sarif_file: trivy.sarif }
+        with:
+          sarif_file: trivy.sarif
       - name: Fail on findings
         if: ${{ inputs.fail_on_findings == 'true' }}
-        run: jq '.runs[].results | length' trivy.sarif | awk '{s+=$1} END{exit (s>0)?1:0}'
+        run: |
+          # suma resultados del SARIF; si hay >0, falla
+          COUNT=$(jq '[.runs[].results] | map(length) | add' trivy.sarif)
+          test "${COUNT:-0}" -eq 0
