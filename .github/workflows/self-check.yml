@@ -1,14 +1,16 @@
+---
 name: Self Check
-on:
-  pull_request:
-    branches: [ "main" ]
 
-permissions:
-  contents: read
+'on':
+  pull_request:
+    branches: ["main"]
 
 jobs:
-  build:
-    name: Build & Test
+  self-check:
+    name: Self Check (YAML syntax)
     runs-on: ubuntu-latest
     steps:
-      - run: echo "ok"
+      - uses: actions/checkout@v4
+      - name: Run actionlint
+        uses: rhysd/actionlint@v1.6.27
+        

@@ -1,5 +1,7 @@
-name: Build & Test
-on:
+---
+name: Build & Test (Java Maven)
+
+'on':
   workflow_call:
     inputs:
       app_dir:
@@ -30,3 +32,4 @@ jobs:
           name: unit-test-reports
           path: "**/surefire-reports/*.xml"
           if-no-files-found: ignore
+          

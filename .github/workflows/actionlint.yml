@@ -1,0 +1,27 @@
+name: Actionlint (GHA syntax)
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**/*.yml"
+      - ".github/workflows/**/*.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: Actionlint (GHA syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Versión estable (no usar @v1)
+      - name: Run actionlint
+        uses: rhysd/actionlint@v1.6.27
+        # Si quieres permitir expresiones no estándar, puedes pasar flags:
+        # with:
+        #   args: -shellcheck= -format=sarif
+        

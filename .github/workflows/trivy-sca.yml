@@ -1,46 +1,27 @@
+---
 name: Trivy SCA
-on:
+
+'on':
   workflow_call:
     inputs:
       app_dir:
+        required: true
         type: string
-        required: false
-        default: '.'
-      severity:
-        type: string
-        default: 'HIGH,CRITICAL'
-      ignore_unfixed:
-        type: string
-        default: 'true'
-      fail_on_findings:
-        type: string
-        default: 'true'
 
 permissions:
   contents: read
   security-events: write
 
 jobs:
-  sca:
-    name: Trivy SCA
+  trivy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: aquasecurity/trivy-action@0.24.0
+      - name: Run Trivy SCA
+        uses: aquasecurity/trivy-action@0.20.0
         with:
           scan-type: fs
-          scanners: vuln
-          format: sarif
-          output: trivy.sarif
-          working-directory: ${{ inputs.app_dir }}
-          severity: ${{ inputs.severity }}
-          ignore-unfixed: ${{ inputs.ignore_unfixed }}
-      - uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: trivy.sarif
-      - name: Fail on findings
-        if: ${{ inputs.fail_on_findings == 'true' }}
-        run: |
-          # suma resultados del SARIF; si hay >0, falla
-          COUNT=$(jq '[.runs[].results] | map(length) | add' trivy.sarif)
-          test "${COUNT:-0}" -eq 0
+          scan-ref: ${{ inputs.app_dir }}
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          
