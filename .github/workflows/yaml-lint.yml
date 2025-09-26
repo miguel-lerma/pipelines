@@ -1,0 +1,29 @@
+name: YAML Lint
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - ".github/workflows/**/*.yml"
+      - ".github/workflows/**/*.yaml"
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    name: Actionlint (GHA syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rhysd/actionlint@v1   # valida sintaxis de GitHub Actions
+
+  yamllint:
+    name: yamllint (YAML format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -y
+          sudo apt-get install -y yamllint
+          yamllint -d "{extends: default, rules: {line-length: {max: 160}}}" .github/workflows
