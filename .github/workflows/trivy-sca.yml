@@ -1,3 +1,4 @@
+
 ---
 name: Trivy SCA
 
@@ -30,8 +31,10 @@ jobs:
     name: Trivy SCA
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: aquasecurity/trivy-action@0.24.0
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run Trivy SCA
+        uses: aquasecurity/trivy-action@0.24.0
         with:
           scan-type: fs
           scanners: vuln
@@ -40,7 +43,8 @@ jobs:
           working-directory: ${{ inputs.app_dir }}
           severity: ${{ inputs.severity }}
           ignore-unfixed: ${{ inputs.ignore_unfixed }}
-      - uses: github/codeql-action/upload-sarif@v3
+      - name: Upload SARIF
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
       - name: Fail on findings
@@ -48,4 +52,3 @@ jobs:
         run: |
           COUNT=$(jq '[.runs[].results] | map(length) | add' trivy.sarif)
           test "${COUNT:-0}" -eq 0
-          
