@@ -32,3 +32,4 @@ jobs:
               max: 160
           CFG
           yamllint -c .yamllint.yml .github/workflows
+          
