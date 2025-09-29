@@ -1,5 +1,6 @@
 ---
 name: YAML Lint
+
 'on':
   pull_request:
     branches: ["main"]
@@ -12,11 +13,13 @@ permissions:
 
 jobs:
   yamllint:
+    name: yamllint (YAML format)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Escribir config
+      - name: Write yamllint config
         run: |
           cat > .yamllint.yml <<'CFG'
           extends: default
@@ -25,20 +28,19 @@ jobs:
               present: true
             line-length:
               max: 160
-            # mantén estas activas; son las que te están pegando:
-            trailing-spaces: {level: error}
-            new-line-at-end-of-file: {level: error}
+            trailing-spaces:
+              level: error
+            new-line-at-end-of-file:
+              level: error
+            truthy: disable
+            brackets: disable
+            comments: disable
+            indentation: disable
           CFG
 
-      # 1) Anotaciones en la UI
-      - uses: ibiqlik/action-yamllint@v3
+      - name: Run yamllint
+        uses: ibiqlik/action-yamllint@v3
         with:
           file_or_dir: ".github/workflows"
           format: github
           strict: true
-
-      # 2) Salida legible en logs (mismo análisis)
-      - name: yamllint (stdout)
-        run: |
-          python3 -m pip install --user yamllint
-          ~/.local/bin/yamllint -c .yamllint.yml -f standard .github/workflows

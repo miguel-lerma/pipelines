@@ -23,16 +23,21 @@ jobs:
       run:
         working-directory: ${{ inputs.app_dir }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
           cache: maven
 
-      - run: mvn -q -DskipTests=false test jacoco:report
+      - name: Test & Report
+        run: mvn -q -DskipTests=false test jacoco:report
 
       - id: cov
+        name: Parse coverage
         run: |
           # shellcheck disable=SC2086
           FILE=target/site/jacoco/jacoco.xml
@@ -47,7 +52,8 @@ jobs:
             echo "pct=0" >> "$GITHUB_OUTPUT"
           fi
 
-      - run: |
+      - name: Summary
+        run: |
           {
             echo "### JaCoCo Coverage"
             echo "**Line Coverage:** ${{ steps.cov.outputs.pct }}%"
