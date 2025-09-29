@@ -29,7 +29,9 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: maven
+
       - run: mvn -q -DskipTests=false test jacoco:report
+
       - id: cov
         run: |
           # shellcheck disable=SC2086
@@ -44,8 +46,11 @@ jobs:
           else
             echo "pct=0" >> "$GITHUB_OUTPUT"
           fi
+
       - run: |
-          echo "### JaCoCo Coverage" >> "$GITHUB_STEP_SUMMARY"
-          echo "**Line Coverage:** ${{ steps.cov.outputs.pct }}%" >> "$GITHUB_STEP_SUMMARY"
-          echo "_(informativo; umbral mínimo: ${{ inputs.coverage_min }}%)_" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### JaCoCo Coverage"
+            echo "**Line Coverage:** ${{ steps.cov.outputs.pct }}%"
+            echo "_(informativo; umbral mínimo: ${{ inputs.coverage_min }}%)_"
+          } >> "$GITHUB_STEP_SUMMARY"
     continue-on-error: true
