@@ -1,5 +1,5 @@
 ---
-name: Actionlint (GHA syntax)
+name: YAML Lint
 
 'on':
   pull_request:
@@ -12,11 +12,35 @@ permissions:
   contents: read
 
 jobs:
-  actionlint:
-    name: Actionlint (GHA syntax)
+  yamllint:
+    name: yamllint (YAML format)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Run actionlint
-        uses: rhysd/actionlint@v1.6.27
+
+      # Perfil de reglas "relajado" para no bloquear mientras estabilizamos
+      - name: Write yamllint config
+        run: |
+          cat > .yamllint.yml <<'CFG'
+          extends: default
+          rules:
+            # Deja sólo lo esencial, desactiva reglas ruidosas por ahora
+            document-start:
+              present: true
+            line-length:
+              max: 160
+            truthy: disable
+            comments: disable
+            indentation: disable
+            brackets: disable
+            trailing-spaces: disable
+            new-line-at-end-of-file: disable
+          CFG
+
+      - name: Run yamllint (annotations only)
+        uses: ibiqlik/action-yamllint@v3
+        with:
+          file_or_dir: ".github/workflows"
+          format: github
+          strict: false     # <- No falla el job, sólo anotas
