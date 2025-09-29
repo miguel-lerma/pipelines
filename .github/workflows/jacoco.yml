@@ -1,4 +1,3 @@
-
 ---
 name: JaCoCo Coverage
 
@@ -35,8 +34,8 @@ jobs:
         run: |
           FILE=target/site/jacoco/jacoco.xml
           if [ -f "$FILE" ]; then
-            MISSED=$(grep -oP 'counter type="LINE" missed="\K[0-9]+' "$FILE" | head -1 || echo 0)
-            COVERED=$(grep -oP 'counter type="LINE".*covered="\K[0-9]+' "$FILE" | head -1 || echo 0)
+            MISSED=$(grep -oP 'counter type="LINE" missed="\\K[0-9]+' "$FILE" | head -1 || echo 0)
+            COVERED=$(grep -oP 'counter type="LINE".*covered="\\K[0-9]+' "$FILE" | head -1 || echo 0)
             TOTAL=$((MISSED + COVERED))
             PCT=0
             if [ "$TOTAL" -gt 0 ]; then PCT=$((100 * COVERED / TOTAL)); fi
