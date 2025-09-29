@@ -1,5 +1,8 @@
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
 
+=======
+>>>>>>> Stashed changes
 =======
 >>>>>>> Stashed changes
 ---
@@ -7,6 +10,7 @@ name: CodeQL Analysis
 
 'on':
   workflow_call:
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
     inputs:
       language:
@@ -18,6 +22,8 @@ name: CodeQL Analysis
         default: "warning"  # warning|enforce
 =======
 >>>>>>> Stashed changes
+=======
+>>>>>>> Stashed changes
 
 jobs:
   analyze:
@@ -27,6 +33,7 @@ jobs:
       actions: read
       contents: read
       security-events: write
+<<<<<<< Updated upstream
 <<<<<<< Updated upstream
     steps:
       - name: Checkout
@@ -49,9 +56,23 @@ jobs:
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
+=======
+    strategy:
+      matrix:
+        language: ["java", "javascript", "csharp"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+>>>>>>> Stashed changes
           languages: ${{ matrix.language }}
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
       - name: Perform CodeQL Analysis
+<<<<<<< Updated upstream
+        uses: github/codeql-action/analyze@v3
+>>>>>>> Stashed changes
+=======
         uses: github/codeql-action/analyze@v3
 >>>>>>> Stashed changes

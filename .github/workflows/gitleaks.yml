@@ -19,8 +19,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run Gitleaks
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
         uses: gitleaks/gitleaks-action@v2
         
+=======
+        uses: gitleaks/gitleaks-action@v2
+>>>>>>> Stashed changes
 =======
         uses: gitleaks/gitleaks-action@v2
 >>>>>>> Stashed changes

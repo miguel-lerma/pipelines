@@ -28,8 +28,12 @@ jobs:
       - run: npm ci
       - run: npm run build --if-present
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
       - run: npm test --if-present
       
+=======
+      - run: npm test --if-present
+>>>>>>> Stashed changes
 =======
       - run: npm test --if-present
 >>>>>>> Stashed changes

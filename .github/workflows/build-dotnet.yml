@@ -27,8 +27,12 @@ jobs:
       - run: dotnet restore
       - run: dotnet build --configuration Release --no-restore
 <<<<<<< Updated upstream
+<<<<<<< Updated upstream
       - run: dotnet test --no-build --verbosity normal
       
+=======
+      - run: dotnet test --no-build --verbosity normal
+>>>>>>> Stashed changes
 =======
       - run: dotnet test --no-build --verbosity normal
 >>>>>>> Stashed changes
