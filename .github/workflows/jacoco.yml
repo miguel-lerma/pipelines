@@ -1,38 +1,49 @@
-name: JaCoCo (informativo)
-on:
+---
+name: JaCoCo Coverage
+
+'on':
   workflow_call:
     inputs:
       app_dir:
         required: true
         type: string
       coverage_min:
+        required: false
         type: string
-        default: '0'
+        default: "0"
 
 permissions:
   contents: read
 
 jobs:
-  jacoco:
+  coverage:
     name: JaCoCo (informativo)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: ${{ inputs.app_dir }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
           cache: maven
-      - run: mvn -q -DskipTests=false test jacoco:report
+
+      - name: Test & Report
+        run: mvn -q -DskipTests=false test jacoco:report
+
       - id: cov
+        name: Parse coverage
         run: |
+          # shellcheck disable=SC2086
           FILE=target/site/jacoco/jacoco.xml
           if [ -f "$FILE" ]; then
-            MISSED=$(grep -oP 'counter type="LINE" missed="\\K[0-9]+' "$FILE" | head -1 || echo 0)
-            COVERED=$(grep -oP 'counter type="LINE".*covered="\\K[0-9]+' "$FILE" | head -1 || echo 0)
+            MISSED=$(grep -oP 'counter type="LINE" missed="\K[0-9]+' "$FILE" | head -1 || echo 0)
+            COVERED=$(grep -oP 'counter type="LINE".*covered="\K[0-9]+' "$FILE" | head -1 || echo 0)
             TOTAL=$((MISSED + COVERED))
             PCT=0
             if [ "$TOTAL" -gt 0 ]; then PCT=$((100 * COVERED / TOTAL)); fi
@@ -40,8 +51,12 @@ jobs:
           else
             echo "pct=0" >> "$GITHUB_OUTPUT"
           fi
-      - run: |
-          echo "### JaCoCo Coverage" >> $GITHUB_STEP_SUMMARY
-          echo "**Line Coverage:** ${{ steps.cov.outputs.pct }}%" >> $GITHUB_STEP_SUMMARY
-          echo "_(informativo; umbral mínimo: ${{ inputs.coverage_min }}%)_"
+
+      - name: Summary
+        run: |
+          {
+            echo "### JaCoCo Coverage"
+            echo "**Line Coverage:** ${{ steps.cov.outputs.pct }}%"
+            echo "_(informativo; umbral mínimo: ${{ inputs.coverage_min }}%)_"
+          } >> "$GITHUB_STEP_SUMMARY"
     continue-on-error: true

@@ -1,5 +1,7 @@
-name: Build & Test
-on:
+---
+name: Build & Test (Node + React)
+
+'on':
   workflow_call:
     inputs:
       app_dir:
@@ -17,17 +19,24 @@ jobs:
       run:
         working-directory: ${{ inputs.app_dir }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: "20"
+          cache: npm
           cache-dependency-path: ${{ inputs.app_dir }}/package-lock.json
-      - run: npm ci
-      - run: npm run lint --if-present
-      - run: npm test --if-present -- --ci --watch=false
-      - run: npm run build --if-present
-      - uses: actions/upload-artifact@v4
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint --if-present
+      - name: Test
+        run: npm test --if-present -- --ci --watch=false
+      - name: Build
+        run: npm run build --if-present
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: unit-test-reports

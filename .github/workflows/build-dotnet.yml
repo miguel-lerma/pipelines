@@ -1,5 +1,7 @@
-name: Build & Test
-on:
+---
+name: Build & Test (.NET)
+
+'on':
   workflow_call:
     inputs:
       app_dir:
@@ -17,14 +19,20 @@ jobs:
       run:
         working-directory: ${{ inputs.app_dir }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
-      - run: dotnet restore
-      - run: dotnet build --configuration Release --no-restore
-      - run: dotnet test --configuration Release --no-build --verbosity normal
-      - uses: actions/upload-artifact@v4
+          dotnet-version: "8.0.x"
+      - name: Restore
+        run: dotnet restore
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+      - name: Test
+        run: dotnet test --configuration Release --no-build --verbosity normal
+      - name: Upload reports
+        uses: actions/upload-artifact@v4
         if: always()
         with:
           name: unit-test-reports

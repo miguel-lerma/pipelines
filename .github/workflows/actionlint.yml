@@ -1,16 +1,19 @@
 ---
-name: Self Check
+name: Actionlint (GHA syntax)
 
 'on':
   pull_request:
     branches: ["main"]
+    paths:
+      - ".github/workflows/**/*.yml"
+      - ".github/workflows/**/*.yaml"
 
 permissions:
   contents: read
 
 jobs:
-  self-check:
-    name: Self Check (YAML syntax)
+  actionlint:
+    name: Actionlint (GHA syntax)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
