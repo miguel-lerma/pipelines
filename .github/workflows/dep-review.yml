@@ -13,5 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Dependency Review
+<<<<<<< Updated upstream
         uses: actions/dependency-review-action@v4
         
+=======
+        uses: actions/dependency-review-action@v4
+>>>>>>> Stashed changes

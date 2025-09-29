@@ -1,4 +1,7 @@
+<<<<<<< Updated upstream
 
+=======
+>>>>>>> Stashed changes
 ---
 name: Trivy SCA
 
@@ -6,7 +9,9 @@ name: Trivy SCA
   workflow_call:
     inputs:
       app_dir:
+        required: true
         type: string
+<<<<<<< Updated upstream
         required: false
         default: "."
       severity:
@@ -21,16 +26,18 @@ name: Trivy SCA
         type: string
         required: false
         default: "true"
+=======
+>>>>>>> Stashed changes
 
 permissions:
   contents: read
   security-events: write
 
 jobs:
-  sca:
-    name: Trivy SCA
+  trivy:
     runs-on: ubuntu-latest
     steps:
+<<<<<<< Updated upstream
       - name: Checkout
         uses: actions/checkout@v4
       - name: Run Trivy SCA
@@ -52,3 +59,13 @@ jobs:
         run: |
           COUNT=$(jq '[.runs[].results] | map(length) | add' trivy.sarif)
           test "${COUNT:-0}" -eq 0
+=======
+      - uses: actions/checkout@v4
+      - name: Run Trivy SCA
+        uses: aquasecurity/trivy-action@0.20.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ inputs.app_dir }}
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+>>>>>>> Stashed changes

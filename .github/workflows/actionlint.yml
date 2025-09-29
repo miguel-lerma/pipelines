@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 name: Actionlint (GHA syntax)
 
 on:
@@ -6,11 +7,21 @@ on:
     paths:
       - ".github/workflows/**/*.yml"
       - ".github/workflows/**/*.yaml"
+=======
+---
+name: YAML Lint
+
+'on':
+  pull_request:
+    branches: ["main"]
+    paths: [".github/workflows/**/*.yml", ".github/workflows/**/*.yaml"]
+>>>>>>> Stashed changes
 
 permissions:
   contents: read
 
 jobs:
+<<<<<<< Updated upstream
   actionlint:
     name: Actionlint (GHA syntax)
     runs-on: ubuntu-latest
@@ -25,3 +36,17 @@ jobs:
         # with:
         #   args: -shellcheck= -format=sarif
         
+=======
+  yamllint:
+    name: yamllint (YAML format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yamllint
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y yamllint
+      - name: Run yamllint
+        run: |
+          yamllint -d "{extends: default, rules: {line-length: {max: 160}}}" .github/workflows
+>>>>>>> Stashed changes

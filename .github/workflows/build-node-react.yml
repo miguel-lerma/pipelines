@@ -27,5 +27,9 @@ jobs:
           cache-dependency-path: ${{ inputs.app_dir }}/package-lock.json
       - run: npm ci
       - run: npm run build --if-present
+<<<<<<< Updated upstream
       - run: npm test --if-present
       
+=======
+      - run: npm test --if-present
+>>>>>>> Stashed changes

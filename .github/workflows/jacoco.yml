@@ -1,4 +1,7 @@
+<<<<<<< Updated upstream
 
+=======
+>>>>>>> Stashed changes
 ---
 name: JaCoCo Coverage
 
@@ -8,6 +11,7 @@ name: JaCoCo Coverage
       app_dir:
         required: true
         type: string
+<<<<<<< Updated upstream
       coverage_min:
         required: false
         type: string
@@ -16,6 +20,11 @@ name: JaCoCo Coverage
 jobs:
   coverage:
     name: JaCoCo (informativo)
+=======
+
+jobs:
+  coverage:
+>>>>>>> Stashed changes
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -29,6 +38,7 @@ jobs:
           distribution: temurin
           java-version: "17"
           cache: maven
+<<<<<<< Updated upstream
       - name: Run tests & jacoco report
         run: mvn -q -DskipTests=false test jacoco:report
       - name: Parse coverage
@@ -51,3 +61,10 @@ jobs:
           echo "**Line Coverage:** ${{ steps.cov.outputs.pct }}%" >> $GITHUB_STEP_SUMMARY
           echo "_(informativo; umbral mínimo: ${{ inputs.coverage_min }}%)_"
     continue-on-error: true
+=======
+      - run: mvn -B test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: ${{ inputs.app_dir }}/target/site/jacoco/index.html
+>>>>>>> Stashed changes

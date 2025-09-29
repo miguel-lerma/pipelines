@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 
 ---
 name: Self Check
@@ -5,16 +6,27 @@ name: Self Check
 'on':
   pull_request:
     branches: ["main"]
+=======
+---
+name: Self Check
+>>>>>>> Stashed changes
 
-permissions:
-  contents: read
+'on':
+  pull_request:
+    branches: ["main"]
 
 jobs:
   self-check:
     name: Self Check (YAML syntax)
     runs-on: ubuntu-latest
     steps:
+<<<<<<< Updated upstream
       - name: Checkout
         uses: actions/checkout@v4
       - name: Run actionlint
         uses: rhysd/actionlint@v1.6.27
+=======
+      - uses: actions/checkout@v4
+      - name: Run actionlint
+        uses: rhysd/actionlint@v1.6.27
+>>>>>>> Stashed changes
