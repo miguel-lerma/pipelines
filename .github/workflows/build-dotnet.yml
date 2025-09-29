@@ -1,5 +1,5 @@
 ---
-name: Build & Test (.NET)
+name: Build & Test (Node + React)
 
 'on':
   workflow_call:
@@ -20,16 +20,20 @@ jobs:
         working-directory: ${{ inputs.app_dir }}
     steps:
       - uses: actions/checkout@v4
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
+      - uses: actions/setup-node@v4
         with:
-          dotnet-version: '8.0.x'
-      - run: dotnet restore
-      - run: dotnet build --configuration Release --no-restore
-      - run: dotnet test --configuration Release --no-build --verbosity normal
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: ${{ inputs.app_dir }}/package-lock.json
+      - run: npm ci
+      - run: npm run lint --if-present
+      - run: npm test --if-present -- --ci --watch=false
+      - run: npm run build --if-present
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: unit-test-reports
-          path: "**/TestResults/**/*.trx"
+          path: |
+            **/jest-junit*.xml
+            **/test-results/**/*.xml
           if-no-files-found: ignore
