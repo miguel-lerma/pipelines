@@ -1,4 +1,3 @@
-
 ---
 name: JaCoCo Coverage
 
@@ -33,6 +32,7 @@ jobs:
       - run: mvn -q -DskipTests=false test jacoco:report
       - id: cov
         run: |
+          # shellcheck disable=SC2086
           FILE=target/site/jacoco/jacoco.xml
           if [ -f "$FILE" ]; then
             MISSED=$(grep -oP 'counter type="LINE" missed="\K[0-9]+' "$FILE" | head -1 || echo 0)
@@ -45,7 +45,7 @@ jobs:
             echo "pct=0" >> "$GITHUB_OUTPUT"
           fi
       - run: |
-          echo "### JaCoCo Coverage" >> $GITHUB_STEP_SUMMARY
-          echo "**Line Coverage:** ${{ steps.cov.outputs.pct }}%" >> $GITHUB_STEP_SUMMARY
-          echo "_(informativo; umbral mínimo: ${{ inputs.coverage_min }}%)_"
+          echo "### JaCoCo Coverage" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Line Coverage:** ${{ steps.cov.outputs.pct }}%" >> "$GITHUB_STEP_SUMMARY"
+          echo "_(informativo; umbral mínimo: ${{ inputs.coverage_min }}%)_" >> "$GITHUB_STEP_SUMMARY"
     continue-on-error: true

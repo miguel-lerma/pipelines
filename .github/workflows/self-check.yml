@@ -6,6 +6,9 @@ name: Self Check
   pull_request:
     branches: ["main"]
 
+permissions:
+  contents: read
+
 jobs:
   self-check:
     name: Self Check (YAML syntax)

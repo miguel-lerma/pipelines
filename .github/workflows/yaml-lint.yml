@@ -17,19 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install yamllint
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y yamllint
-
-      - name: Run yamllint
-        run: |
-          cat > .yamllint.yml <<'CFG'
-          extends: default
-          rules:
-            line-length:
-              max: 160
-          CFG
-          yamllint -c .yamllint.yml .github/workflows
-          
+      - uses: ibiqlik/action-yamllint@v3
+        with:
+          format: github
+          strict: true
+          config_data: |
+            extends: default
+            rules:
+              line-length:
+                max: 160
