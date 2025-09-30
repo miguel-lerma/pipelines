@@ -1,49 +1,37 @@
 ---
-name: Gitleaks (secrets)
+name: Gitleaks
 
-on:
+'on':
   workflow_call:
     inputs:
       app_dir:
         required: false
         type: string
         default: "."
-    secrets:
-      token:
-        required: false
-
-permissions:
-  contents: read
-  security-events: write
 
 jobs:
   gitleaks:
     name: Gitleaks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: read
+    env:
+      # Necesario desde el breaking change de Gitleaks para escanear PRs
+      GITHUB_TOKEN: ${{ github.token }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Esta acción descarga y deja gitleaks en PATH, pero no acepta "args"
-      - name: Install gitleaks
+      # La acción ya trae el comando por dentro; no pases 'args'
+      - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Ejecutamos gitleaks con los flags que necesitas y generamos SARIF
-      - name: Run gitleaks detect
-        run: |
-          gitleaks version
-          gitleaks detect \
-            --no-git \
-            --source "${{ inputs.app_dir }}" \
-            --redact \
-            --report-format sarif \
-            --report-path gitleaks.sarif
-
-      # Subimos el SARIF sólo si existe (best effort)
+      # Best-effort: sube solo si el archivo existe
       - name: Upload SARIF (best effort)
         if: always() && hashFiles('gitleaks.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
