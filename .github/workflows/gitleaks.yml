@@ -1,11 +1,12 @@
----
-name: Gitleaks (secrets)
+name: Gitleaks
 
-on:
-  pull_request:
-    branches: [develop, staging, main]
-  push:
-    branches: [develop, staging, main]
+'on':
+  workflow_call:
+    inputs:
+      app_dir:
+        required: false
+        type: string
+        default: "."
 
 permissions:
   contents: read
@@ -21,18 +22,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Acción oficial. No pasamos "args" para evitar el warning de inputs.
-      # La acción por defecto detecta leaks y falla si encuentra alguno.
-      # Si quieres flags personalizados, te muestro cómo abajo.
-      - name: Run Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+      - name: Install Gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
+          | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Run Gitleaks (generate SARIF)
+        working-directory: ${{ inputs.app_dir }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gitleaks detect --no-git --redact \
+            --report-format sarif \
+            --report-path "${{ github.workspace }}/gitleaks.sarif"
 
-      # Publica el reporte SARIF si la acción lo genera (últimas versiones lo soportan);
-      # si no aparece el archivo, no sube nada y no falla.
       - name: Upload SARIF (best effort)
-        if: always()
+        if: always() && hashFiles('gitleaks.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks.sarif
