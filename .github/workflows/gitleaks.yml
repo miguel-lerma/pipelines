@@ -1,12 +1,16 @@
-name: Gitleaks
+---
+name: Gitleaks (secrets)
 
-'on':
+on:
   workflow_call:
     inputs:
       app_dir:
         required: false
         type: string
         default: "."
+    secrets:
+      token:
+        required: false
 
 permissions:
   contents: read
@@ -22,21 +26,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Gitleaks
-        run: |
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz \
-          | tar -xz -C /usr/local/bin gitleaks
-          gitleaks version
-
-      - name: Run Gitleaks (generate SARIF)
-        working-directory: ${{ inputs.app_dir }}
+      # Esta acción descarga y deja gitleaks en PATH, pero no acepta "args"
+      - name: Install gitleaks
+        uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gitleaks detect --no-git --redact \
-            --report-format sarif \
-            --report-path "${{ github.workspace }}/gitleaks.sarif"
 
+      # Ejecutamos gitleaks con los flags que necesitas y generamos SARIF
+      - name: Run gitleaks detect
+        run: |
+          gitleaks version
+          gitleaks detect \
+            --no-git \
+            --source "${{ inputs.app_dir }}" \
+            --redact \
+            --report-format sarif \
+            --report-path gitleaks.sarif
+
+      # Subimos el SARIF sólo si existe (best effort)
       - name: Upload SARIF (best effort)
         if: always() && hashFiles('gitleaks.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
