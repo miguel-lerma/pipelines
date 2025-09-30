@@ -1,7 +1,7 @@
 ---
 name: Gitleaks (secrets)
 
-'on':
+on:
   workflow_call: {}
 
 permissions:
@@ -10,10 +10,13 @@ permissions:
 
 jobs:
   gitleaks:
+    name: Gitleaks (secrets)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Gitleaks
         run: |
@@ -24,11 +27,14 @@ jobs:
 
       - name: Scan with Gitleaks (SARIF)
         run: |
-          gitleaks detect --no-git --redact \
-            --report-format sarif --report-path gitleaks.sarif
-          # o agrega --config .gitleaks.toml si lo tienes
+          gitleaks detect \
+            --no-git \
+            --redact \
+            --report-format sarif \
+            --report-path gitleaks.sarif
 
       - name: Upload SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks.sarif
+
