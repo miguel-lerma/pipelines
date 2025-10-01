@@ -38,12 +38,12 @@ jobs:
         with:
           sarif_file: gitleaks.sarif
 
-      # Resumen en Step Summary (no cambia el estado del job)
+      # Resumen bonito para la pestaña "Summary" del job (y arregla SC2034)
       - name: Summary
         if: always()
         shell: bash
         run: |
-          if [ -f "gitleaks.sarif" ]; then
+          if [ -f "gitleaks.sarif" ] && command -v jq >/dev/null 2>&1; then
             TOTAL=$(jq '[.runs[].results] | map(length) | add // 0' gitleaks.sarif)
             TOTAL=${TOTAL:-0}
           else
@@ -60,6 +60,8 @@ jobs:
 
           {
             echo "## Gitleaks (Secrets)"
+            echo
+            echo "### $TITLE"
             echo
             echo "$BADGE"
             echo
