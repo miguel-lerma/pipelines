@@ -11,7 +11,7 @@ on:
       node_version:
         type: string
         required: false
-        description: 'Versión Node fallback si no hay .nvmrc (ej: "20.x")'
+        description: 'Versión de Node fallback si no hay .nvmrc (ej: "20.x")'
       run_lint:
         type: boolean
         default: true
@@ -32,7 +32,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Preferimos .nvmrc si existe; si no, usamos inputs.node_version o 20.x
+      # Usa .nvmrc si existe; si no, cae a inputs.node_version o 20.x por defecto
       - name: Setup Node (prefer .nvmrc; fallback to input/default)
         uses: actions/setup-node@v4
         with:
@@ -67,8 +67,8 @@ jobs:
           {
             echo "## Node build summary"
             echo
-            echo "- **Node**: $(node -v)"
-            echo "- **NPM**:  $(npm -v)"
+            echo "- **Node**: $(node -v 2>/dev/null || echo 'n/a')"
+            echo "- **NPM**:  $(npm -v 2>/dev/null || echo 'n/a')"
             echo "- **Dir**:  \`${{ inputs.app_dir }}\`"
             echo "- **Lint**: ${{ inputs.run_lint }}"
             echo "- **Test**: ${{ inputs.run_test }}"
