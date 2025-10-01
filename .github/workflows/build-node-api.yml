@@ -1,0 +1,59 @@
+---
+name: Reusable — Build Node API
+
+on:
+  workflow_call:
+    inputs:
+      app_dir:
+        type: string
+        required: false
+        default: "."
+      node_version:
+        type: string
+        required: false
+        description: "Si no usas .nvmrc, define aquí (ej. '20')"
+      run_lint:
+        type: boolean
+        default: true
+      run_test:
+        type: boolean
+        default: true
+      run_build:
+        type: boolean
+        default: false   # en APIs normalmente no se compila
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.app_dir }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          node-version-file: ${{ inputs.node_version == '' && '.nvmrc' || '' }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.app_dir }}/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        if: ${{ inputs.run_lint }}
+        run: npm run lint --if-present
+
+      - name: Test
+        if: ${{ inputs.run_test }}
+        run: npm test --if-present
+
+      - name: Build
+        if: ${{ inputs.run_build }}
+        run: npm run build --if-present
