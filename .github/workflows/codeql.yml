@@ -23,12 +23,65 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Init
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ inputs.language }}
+
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
+
       - name: Analyze
         uses: github/codeql-action/analyze@v3
+
+      # Resumen en Step Summary (busca el SARIF generado sin cambiar tu flujo)
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          # Intentamos localizar algún SARIF que haya dejado CodeQL
+          SARIF=$(git ls-files -z | xargs -0 -I{} bash -lc '[[ "{}" == *.sarif ]] && echo "{}"' | head -n1)
+          # Fallback: busca también fuera del índice (por si no está trackeado)
+          if [ -z "$SARIF" ]; then
+            SARIF=$(find . -type f -name "*.sarif" | head -n1 || true)
+          fi
+
+          if [ -n "$SARIF" ] && command -v jq >/dev/null 2>&1; then
+            TOTAL=$(jq '[.runs[].results] | map(length) | add // 0' "$SARIF")
+            ERR=$(jq '[.runs[].results[]? | select(.level=="error")]   | length' "$SARIF")
+            WARN=$(jq '[.runs[].results[]? | select(.level=="warning")] | length' "$SARIF")
+            NOTE=$(jq '[.runs[].results[]? | select(.level=="note")]    | length' "$SARIF")
+          else
+            TOTAL=0; ERR=0; WARN=0; NOTE=0
+          fi
+
+          TOTAL=${TOTAL:-0}; ERR=${ERR:-0}; WARN=${WARN:-0}; NOTE=${NOTE:-0}
+
+          if [ "$TOTAL" -eq 0 ]; then
+            BADGE="![status](https://img.shields.io/badge/CodeQL-0%20alerts-brightgreen)"
+          else
+            BADGE="![status](https://img.shields.io/badge/CodeQL-${TOTAL}%20alerts-orange)"
+          fi
+
+          {
+            echo "## CodeQL (${{ inputs.language }})"
+            echo
+            echo "$BADGE"
+            echo
+            echo "| Severidad | Conteo |"
+            echo "|---|---:|"
+            echo "| Error    | $ERR |"
+            echo "| Warning  | $WARN |"
+            echo "| Note     | $NOTE |"
+            echo "| **Total**| **$TOTAL** |"
+            echo
+            if [ -n "$SARIF" ]; then
+              echo "_Archivo analizado:_ \`$SARIF\`"
+              echo
+            fi
+            echo "> Revisa **Security → Code scanning alerts** para el detalle."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+    # Mantengo tu comportamiento original
     continue-on-error: ${{ inputs.mode == 'warning' }}
