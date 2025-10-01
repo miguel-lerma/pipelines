@@ -4,20 +4,22 @@ name: CodeQL Analysis
 on:
   workflow_call:
     inputs:
-      # Nuevo: lista JSON de lenguajes (opcional)
+      # Multi-idioma (opcional): JSON array de lenguajes CodeQL
+      # Ej: '["javascript","java","python"]'
       languages_json:
         type: string
         required: false
-        description: '["javascript","java","csharp",...]'
-      # Mantengo compat con tu input actual:
+        description: 'JSON array of languages. Example: ["javascript","java"]'
+      # Compatibilidad con tu input actual
       language:
         type: string
         required: false
-      # Opcional: modo warning
+        description: 'Single language. Example: "javascript"'
+      # Modo: si 'warning', no rompe el build
       mode:
         type: string
         default: "warning"
-      # Opcional: build manual
+      # Build manual opcional
       run_build:
         type: boolean
         default: false
@@ -26,7 +28,10 @@ on:
         required: false
 
 jobs:
-  analyze:
+  # ========== MULTI-LANGUAGE (usa matrix) ==========
+  analyze-matrix:
+    if: ${{ inputs.languages_json != '' }}
+    name: Analyze (matrix)
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -36,33 +41,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Si pasas languages_json usamos matriz; si no, caemos al 'language' simple
-        lang: ${{ fromJSON(inputs.languages_json || '[]') }}
-      # Cuando no haya matriz (caso single), evitamos que matrix sea vacío
-    if: ${{ (inputs.languages_json != '') || (inputs.language != '') }}
+        lang: ${{ fromJSON(inputs.languages_json) }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Init
+      - name: CodeQL Init
         uses: github/codeql-action/init@v3
         with:
-          languages: ${{ matrix.lang || inputs.language }}
+          languages: ${{ matrix.lang }}
 
-      # Build manual (si lo pides)
       - name: Build (manual)
         if: ${{ inputs.run_build && inputs.build_command != '' }}
         run: ${{ inputs.build_command }}
 
-      # Autobuild (solo cuando aplica; para JS normalmente no hace nada)
       - name: Autobuild
         if: ${{ !inputs.run_build }}
         uses: github/codeql-action/autobuild@v3
 
-      - name: Analyze
+      - name: CodeQL Analyze
         uses: github/codeql-action/analyze@v3
         with:
-          category: "/language:${{ matrix.lang || inputs.language }}"
+          category: "/language:${{ matrix.lang }}"
 
       - name: Summary
         if: always()
@@ -81,7 +81,72 @@ jobs:
           fi
           BADGE="![status](https://img.shields.io/badge/CodeQL-${TOTAL}%20alerts-$([[ $TOTAL -eq 0 ]] && echo brightgreen || echo orange))"
           {
-            echo "## CodeQL (${{ matrix.lang || inputs.language }})"
+            echo "## CodeQL (${{ matrix.lang }})"
+            echo
+            echo "$BADGE"
+            echo
+            echo "| Severidad | Conteo |"
+            echo "|---|---:|"
+            echo "| Error    | $ERR |"
+            echo "| Warning  | $WARN |"
+            echo "| Note     | $NOTE |"
+            echo "| **Total**| **$TOTAL** |"
+            echo
+            [[ -n "$SARIF" ]] && echo "_Archivo analizado:_ \`$SARIF\`" && echo
+            echo "> Revisa **Security → Code scanning alerts** para el detalle."
+          } >> "$GITHUB_STEP_SUMMARY" || true
+
+    continue-on-error: ${{ inputs.mode == 'warning' }}
+
+  # ========== SINGLE-LANGUAGE ==========
+  analyze-single:
+    if: ${{ inputs.languages_json == '' && inputs.language != '' }}
+    name: Analyze (${{ inputs.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CodeQL Init
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ inputs.language }}
+
+      - name: Build (manual)
+        if: ${{ inputs.run_build && inputs.build_command != '' }}
+        run: ${{ inputs.build_command }}
+
+      - name: Autobuild
+        if: ${{ !inputs.run_build }}
+        uses: github/codeql-action/autobuild@v3
+
+      - name: CodeQL Analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ inputs.language }}"
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          SARIF="$(git ls-files -z | xargs -0 -I{} bash -lc '[[ "{}" == *.sarif ]] && echo "{}"' | head -n1 || true)"
+          [[ -z "$SARIF" ]] && SARIF="$(find . -type f -name '*.sarif' | head -n1 || true)"
+          if [[ -n "$SARIF" ]] && command -v jq >/dev/null 2>&1; then
+            TOTAL=$(jq '[.runs[].results] | map(length) | add // 0' "$SARIF")
+            ERR=$(jq '[.runs[].results[]? | select(.level=="error")]   | length' "$SARIF")
+            WARN=$(jq '[.runs[].results[]? | select(.level=="warning")] | length' "$SARIF")
+            NOTE=$(jq '[.runs[].results[]? | select(.level=="note")]    | length' "$SARIF")
+          else
+            TOTAL=0; ERR=0; WARN=0; NOTE=0
+          fi
+          BADGE="![status](https://img.shields.io/badge/CodeQL-${TOTAL}%20alerts-$([[ $TOTAL -eq 0 ]] && echo brightgreen || echo orange))"
+          {
+            echo "## CodeQL (${{ inputs.language }})"
             echo
             echo "$BADGE"
             echo
