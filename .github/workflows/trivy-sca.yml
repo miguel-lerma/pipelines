@@ -34,7 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # === Tu paso original (deja el SARIF como ya lo tenías) ===
+      # Escaneo SARIF (tu paso original) – usar scan-ref en lugar de working-directory
       - name: Trivy FS scan (SARIF)
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -42,7 +42,7 @@ jobs:
           scanners: vuln
           format: sarif
           output: trivy.sarif
-          working-directory: "${{ inputs.app_dir }}"
+          scan-ref: "${{ inputs.app_dir }}"
           severity: "${{ inputs.severity }}"
           ignore-unfixed: "${{ inputs.ignore_unfixed }}"
 
@@ -51,19 +51,20 @@ jobs:
         with:
           sarif_file: trivy.sarif
 
-      # === Setup de Trivy CLI para generar JSON y armar el Summary ===
-      - name: Setup Trivy (CLI only)
-        uses: aquasecurity/trivy-action@0.28.0
+      # Instalar Trivy CLI para sacar JSON y construir el Job Summary
+      - name: Setup Trivy (CLI)
+        uses: aquasecurity/setup-trivy@v0.2.1
         with:
-          setup-only: true
+          version: v0.56.1
+          cache: true
+          path: $HOME/.local/bin
 
       - name: Trivy JSON (for summary)
-        working-directory: ${{ inputs.app_dir }}
         run: |
-          trivy fs . \
+          trivy fs "${{ inputs.app_dir }}" \
             --scanners vuln \
             --format json \
-            --output ../trivy.json \
+            --output trivy.json \
             --severity "${{ inputs.severity }}" \
             --ignore-unfixed=${{ inputs.ignore_unfixed }} \
             --exit-code 0
@@ -94,7 +95,7 @@ jobs:
             echo "> El reporte SARIF fue subido a **Code scanning alerts** (pestaña *Security*)."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # === Tu lógica original para fallar el job (sin cambios) ===
+      # Mantén tu lógica de fallo exactamente igual
       - name: Fail on findings
         if: ${{ inputs.fail_on_findings == 'true' }}
         run: |
