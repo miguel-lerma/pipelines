@@ -29,10 +29,12 @@ jobs:
   sca:
     name: Trivy SCA
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # === Tu paso original (deja el SARIF como ya lo tenías) ===
       - name: Trivy FS scan (SARIF)
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -49,6 +51,50 @@ jobs:
         with:
           sarif_file: trivy.sarif
 
+      # === Setup de Trivy CLI para generar JSON y armar el Summary ===
+      - name: Setup Trivy (CLI only)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          setup-only: true
+
+      - name: Trivy JSON (for summary)
+        working-directory: ${{ inputs.app_dir }}
+        run: |
+          trivy fs . \
+            --scanners vuln \
+            --format json \
+            --output ../trivy.json \
+            --severity "${{ inputs.severity }}" \
+            --ignore-unfixed=${{ inputs.ignore_unfixed }} \
+            --exit-code 0
+
+      - name: Build Job Summary
+        run: |
+          if [ -f trivy.json ]; then
+            TOTAL=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy.json 2>/dev/null || echo 0)
+            H=$(jq '[.Results[]?.Vulnerabilities[]?|select(.Severity=="HIGH")] | length' trivy.json 2>/dev/null || echo 0)
+            C=$(jq '[.Results[]?.Vulnerabilities[]?|select(.Severity=="CRITICAL")] | length' trivy.json 2>/dev/null || echo 0)
+          else
+            TOTAL=0; H=0; C=0
+          fi
+
+          STATUS="🟢 Sin hallazgos en ${{ inputs.severity }}"
+          if [ "$TOTAL" -gt 0 ]; then STATUS="🟠 $TOTAL hallazgos (${{ inputs.severity }})"; fi
+          if [ "$C" -gt 0 ]; then STATUS="🔴 $TOTAL hallazgos (${{ inputs.severity }})"; fi
+
+          {
+            echo "## 🔍 Trivy SCA (Dependencies)"
+            echo ""
+            echo "- **Severidades**: \`${{ inputs.severity }}\`  •  **Ignore unfixed**: \`${{ inputs.ignore_unfixed }}\`"
+            echo ""
+            echo "| Estado | Total | HIGH | CRITICAL |"
+            echo "|:--:|--:|--:|--:|"
+            echo "| $STATUS | $TOTAL | $H | $C |"
+            echo ""
+            echo "> El reporte SARIF fue subido a **Code scanning alerts** (pestaña *Security*)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # === Tu lógica original para fallar el job (sin cambios) ===
       - name: Fail on findings
         if: ${{ inputs.fail_on_findings == 'true' }}
         run: |
