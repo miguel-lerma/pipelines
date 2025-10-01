@@ -37,3 +37,37 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks.sarif
+
+      # Resumen bonito para la pestaña "Summary" del job (y arregla SC2034)
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "gitleaks.sarif" ] && command -v jq >/dev/null 2>&1; then
+            TOTAL=$(jq '[.runs[].results] | map(length) | add // 0' gitleaks.sarif)
+            TOTAL=${TOTAL:-0}
+          else
+            TOTAL=0
+          fi
+
+          if [ "$TOTAL" -eq 0 ]; then
+            BADGE="![status](https://img.shields.io/badge/Secrets-0%20found-brightgreen)"
+            TITLE="✅ Sin secretos expuestos"
+          else
+            BADGE="![status](https://img.shields.io/badge/Secrets-${TOTAL}%20found-red)"
+            TITLE="❌ Se detectaron posibles secretos"
+          fi
+
+          {
+            echo "## Gitleaks (Secrets)"
+            echo
+            echo "### $TITLE"
+            echo
+            echo "$BADGE"
+            echo
+            echo "| Métrica | Valor |"
+            echo "|---|---:|"
+            echo "| Posibles secretos | $TOTAL |"
+            echo
+            echo "> Revisa **Security → Code scanning alerts** para el detalle."
+          } >> "$GITHUB_STEP_SUMMARY"
