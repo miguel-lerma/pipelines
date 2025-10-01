@@ -1,24 +1,20 @@
+---
 name: CodeQL Analysis
 
 on:
   workflow_call:
     inputs:
-      # Multi-idioma (opcional): JSON array de lenguajes CodeQL
-      # Ej: '["javascript","java","python"]'
       languages_json:
         type: string
         required: false
-        description: 'JSON array of languages. Example: ["javascript","java"]'
-      # Compatibilidad con tu input actual
+        description: 'JSON array. Ej: ["javascript","java"]'
       language:
         type: string
         required: false
-        description: 'Single language. Example: "javascript"'
-      # Modo: si 'warning', no rompe el build
+        description: 'Single language. Ej: "javascript"'
       mode:
         type: string
         default: "warning"
-      # Build manual opcional
       run_build:
         type: boolean
         default: false
@@ -27,9 +23,10 @@ on:
         required: false
 
 jobs:
-  # ========== MULTI-LANGUAGE (usa matrix) ==========
+  # ========== MULTI-LANGUAGE (matrix) ==========
   analyze-matrix:
-    if: ${{ inputs.languages_json != '' }}
+    # Evita fromJSON sobre valores vacíos o no JSON
+    if: ${{ inputs.languages_json != '' && startsWith(inputs.languages_json, '[') }}
     name: Analyze (matrix)
     runs-on: ubuntu-latest
     permissions:
@@ -99,7 +96,7 @@ jobs:
 
   # ========== SINGLE-LANGUAGE ==========
   analyze-single:
-    if: ${{ inputs.languages_json == '' && inputs.language != '' }}
+    if: ${{ (inputs.languages_json == '' || !startsWith(inputs.languages_json, '[')) && inputs.language != '' }}
     name: Analyze (${{ inputs.language }})
     runs-on: ubuntu-latest
     permissions:
@@ -161,3 +158,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY" || true
 
     continue-on-error: ${{ inputs.mode == 'warning' }}
+
+  # ========== GUARD: sin inputs válidos ==========
+  no-valid-inputs:
+    if: ${{ (inputs.languages_json == '' || !startsWith(inputs.languages_json, '[')) && inputs.language == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::error::Debes pasar 'languages_json' (JSON válido, p.ej. '[\"javascript\",\"java\"]') o 'language' (p.ej. 'javascript')."
+          exit 1
