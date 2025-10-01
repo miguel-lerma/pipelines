@@ -1,0 +1,86 @@
+name: Security (Orchestrator)
+
+on:
+  workflow_call:
+    inputs:
+      # comunes
+      app_dir:
+        type: string
+        required: false
+        default: "."
+      run_gitleaks:
+        type: boolean
+        required: false
+        default: true
+      run_trivy:
+        type: boolean
+        required: false
+        default: true
+      run_codeql:
+        type: boolean
+        required: false
+        default: true
+
+      # Trivy SCA
+      severity:
+        type: string
+        required: false
+        default: "HIGH,CRITICAL"
+      ignore_unfixed:
+        type: string
+        required: false
+        default: "true"
+      fail_on_findings:
+        type: string
+        required: false
+        default: "true"
+
+      # CodeQL (compat + multi-lenguaje)
+      language:
+        type: string
+        required: false
+        default: "javascript"
+      languages_json:
+        type: string
+        required: false
+        description: 'Opcional: JSON con lista de lenguajes, ej: ["javascript","java"]'
+      mode:
+        type: string
+        required: false
+        default: "warning"
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  gitleaks:
+    if: ${{ inputs.run_gitleaks }}
+    name: Gitleaks (secrets)
+    uses: ./.github/workflows/gitleaks.yml
+    with:
+      app_dir: ${{ inputs.app_dir }}
+    secrets: inherit
+
+  trivy:
+    if: ${{ inputs.run_trivy }}
+    name: Trivy SCA (deps)
+    uses: ./.github/workflows/trivy-sca.yml
+    with:
+      app_dir: ${{ inputs.app_dir }}
+      severity: ${{ inputs.severity }}
+      ignore_unfixed: ${{ inputs.ignore_unfixed }}
+      fail_on_findings: ${{ inputs.fail_on_findings }}
+    secrets: inherit
+
+  codeql:
+    if: ${{ inputs.run_codeql }}
+    name: CodeQL
+    uses: ./.github/workflows/codeql.yml
+    with:
+      # compat: si no pasas languages_json, usa 'language'
+      language: ${{ inputs.language }}
+      languages_json: ${{ inputs.languages_json }}
+      mode: ${{ inputs.mode }}
+    secrets: inherit

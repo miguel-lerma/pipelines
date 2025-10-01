@@ -1,53 +1,77 @@
 ---
 name: CodeQL Analysis
 
-'on':
+on:
   workflow_call:
     inputs:
-      language:
-        type: string
-        required: true
-      mode:
+      # Nuevo: lista JSON de lenguajes (opcional)
+      languages_json:
         type: string
         required: false
+        description: '["javascript","java","csharp",...]'
+      # Mantengo compat con tu input actual:
+      language:
+        type: string
+        required: false
+      # Opcional: modo warning
+      mode:
+        type: string
         default: "warning"
+      # Opcional: build manual
+      run_build:
+        type: boolean
+        default: false
+      build_command:
+        type: string
+        required: false
 
 jobs:
   analyze:
-    name: Analyze
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
       security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Si pasas languages_json usamos matriz; si no, caemos al 'language' simple
+        lang: ${{ fromJSON(inputs.languages_json || '[]') }}
+      # Cuando no haya matriz (caso single), evitamos que matrix sea vacío
+    if: ${{ (inputs.languages_json != '') || (inputs.language != '') }}
+
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Init
         uses: github/codeql-action/init@v3
         with:
-          languages: ${{ inputs.language }}
+          languages: ${{ matrix.lang || inputs.language }}
 
+      # Build manual (si lo pides)
+      - name: Build (manual)
+        if: ${{ inputs.run_build && inputs.build_command != '' }}
+        run: ${{ inputs.build_command }}
+
+      # Autobuild (solo cuando aplica; para JS normalmente no hace nada)
       - name: Autobuild
+        if: ${{ !inputs.run_build }}
         uses: github/codeql-action/autobuild@v3
 
       - name: Analyze
         uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.lang || inputs.language }}"
 
-      # Resumen en Step Summary (busca el SARIF generado sin cambiar tu flujo)
       - name: Summary
         if: always()
         shell: bash
         run: |
-          # Intentamos localizar algún SARIF que haya dejado CodeQL
-          SARIF=$(git ls-files -z | xargs -0 -I{} bash -lc '[[ "{}" == *.sarif ]] && echo "{}"' | head -n1)
-          # Fallback: busca también fuera del índice (por si no está trackeado)
-          if [ -z "$SARIF" ]; then
-            SARIF=$(find . -type f -name "*.sarif" | head -n1 || true)
-          fi
-
-          if [ -n "$SARIF" ] && command -v jq >/dev/null 2>&1; then
+          set +e
+          SARIF="$(git ls-files -z | xargs -0 -I{} bash -lc '[[ "{}" == *.sarif ]] && echo "{}"' | head -n1 || true)"
+          [[ -z "$SARIF" ]] && SARIF="$(find . -type f -name '*.sarif' | head -n1 || true)"
+          if [[ -n "$SARIF" ]] && command -v jq >/dev/null 2>&1; then
             TOTAL=$(jq '[.runs[].results] | map(length) | add // 0' "$SARIF")
             ERR=$(jq '[.runs[].results[]? | select(.level=="error")]   | length' "$SARIF")
             WARN=$(jq '[.runs[].results[]? | select(.level=="warning")] | length' "$SARIF")
@@ -55,17 +79,9 @@ jobs:
           else
             TOTAL=0; ERR=0; WARN=0; NOTE=0
           fi
-
-          TOTAL=${TOTAL:-0}; ERR=${ERR:-0}; WARN=${WARN:-0}; NOTE=${NOTE:-0}
-
-          if [ "$TOTAL" -eq 0 ]; then
-            BADGE="![status](https://img.shields.io/badge/CodeQL-0%20alerts-brightgreen)"
-          else
-            BADGE="![status](https://img.shields.io/badge/CodeQL-${TOTAL}%20alerts-orange)"
-          fi
-
+          BADGE="![status](https://img.shields.io/badge/CodeQL-${TOTAL}%20alerts-$([[ $TOTAL -eq 0 ]] && echo brightgreen || echo orange))"
           {
-            echo "## CodeQL (${{ inputs.language }})"
+            echo "## CodeQL (${{ matrix.lang || inputs.language }})"
             echo
             echo "$BADGE"
             echo
@@ -76,12 +92,8 @@ jobs:
             echo "| Note     | $NOTE |"
             echo "| **Total**| **$TOTAL** |"
             echo
-            if [ -n "$SARIF" ]; then
-              echo "_Archivo analizado:_ \`$SARIF\`"
-              echo
-            fi
+            [[ -n "$SARIF" ]] && echo "_Archivo analizado:_ \`$SARIF\`" && echo
             echo "> Revisa **Security → Code scanning alerts** para el detalle."
-          } >> "$GITHUB_STEP_SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY" || true
 
-    # Mantengo tu comportamiento original
     continue-on-error: ${{ inputs.mode == 'warning' }}
