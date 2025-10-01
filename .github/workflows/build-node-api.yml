@@ -11,7 +11,7 @@ on:
       node_version:
         type: string
         required: false
-        description: 'Versión de Node fallback si no hay .nvmrc (ej: "20.x")'
+        description: 'Fallback si no hay .nvmrc (ej: "20.x")'
       run_lint:
         type: boolean
         default: true
@@ -32,12 +32,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Usa .nvmrc si existe; si no, cae a inputs.node_version o 20.x por defecto
-      - name: Setup Node (prefer .nvmrc; fallback to input/default)
+      # Detecta si existe .nvmrc y expone outputs
+      - name: Detect Node version source
+        id: detect-node
+        env:
+          FALLBACK: ${{ inputs.node_version != '' && inputs.node_version || '20.x' }}
+        run: |
+          APP="${{ inputs.app_dir }}"
+          if [ -f "$APP/.nvmrc" ]; then
+            echo "use_nvmrc=true" >> "$GITHUB_OUTPUT"
+            echo "nvmrc_path=$APP/.nvmrc" >> "$GITHUB_OUTPUT"
+          else
+            echo "use_nvmrc=false" >> "$GITHUB_OUTPUT"
+            echo "node_version=${FALLBACK}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Caso 1: usa .nvmrc
+      - name: Setup Node via .nvmrc
+        if: ${{ steps.detect-node.outputs.use_nvmrc == 'true' }}
         uses: actions/setup-node@v4
         with:
-          node-version-file: ${{ hashFiles(format('{0}/.nvmrc', inputs.app_dir)) != '' && format('{0}/.nvmrc', inputs.app_dir) || '' }}
-          node-version: ${{ hashFiles(format('{0}/.nvmrc', inputs.app_dir)) == '' && (inputs.node_version || '20.x') || '' }}
+          node-version-file: ${{ steps.detect-node.outputs.nvmrc_path }}
+          cache: npm
+          cache-dependency-path: ${{ inputs.app_dir }}/package-lock.json
+
+      # Caso 2: usa versión fallback
+      - name: Setup Node via fallback
+        if: ${{ steps.detect-node.outputs.use_nvmrc != 'true' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.detect-node.outputs.node_version }}
           cache: npm
           cache-dependency-path: ${{ inputs.app_dir }}/package-lock.json
 
@@ -73,4 +97,5 @@ jobs:
             echo "- **Lint**: ${{ inputs.run_lint }}"
             echo "- **Test**: ${{ inputs.run_test }}"
             echo "- **Build**: ${{ inputs.run_build }}"
+            echo "- **Fuente versión**: $([ '${{ steps.detect-node.outputs.use_nvmrc }}' = 'true' ] && echo '.nvmrc' || echo '${{ steps.detect-node.outputs.node_version }}')"
           } >> "$GITHUB_STEP_SUMMARY"
