@@ -5,52 +5,94 @@ name: Trivy SCA
   workflow_call:
     inputs:
       app_dir:
-        type: string
         required: false
+        type: string
         default: "."
       severity:
-        type: string
         required: false
+        type: string
         default: "HIGH,CRITICAL"
       ignore_unfixed:
-        type: string
         required: false
+        type: string
         default: "true"
       fail_on_findings:
-        type: string
         required: false
+        type: string
         default: "true"
 
-permissions:
-  contents: read
-  security-events: write
-
 jobs:
-  sca:
-    name: Trivy SCA
+  trivy:
+    name: Trivy SCA (deps)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      APP_DIR: ${{ inputs.app_dir }}
+      SEVERITY: ${{ inputs.severity }}
+      IGNORE_UNFIXED: ${{ inputs.ignore_unfixed }}
+      FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Trivy FS scan (SARIF)
-        uses: aquasecurity/trivy-action@0.24.0
-        with:
-          scan-type: fs
-          scanners: vuln
-          format: sarif
-          output: trivy.sarif
-          working-directory: "${{ inputs.app_dir }}"
-          severity: "${{ inputs.severity }}"
-          ignore-unfixed: "${{ inputs.ignore_unfixed }}"
+      - name: Setup Trivy
+        uses: aquasecurity/trivy-action@0.28.0
 
+      # 1) Genera SARIF para Code Scanning
+      - name: Trivy SARIF
+        run: |
+          trivy fs "$APP_DIR" \
+            --scanners vuln \
+            --format sarif \
+            --output trivy.sarif \
+            --severity "$SEVERITY" \
+            --ignore-unfixed=$IGNORE_UNFIXED \
+            --exit-code 0
       - name: Upload SARIF
+        if: hashFiles('trivy.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
 
-      - name: Fail on findings
-        if: ${{ inputs.fail_on_findings == 'true' }}
+      # 2) Corre en JSON para contar hallazgos y producir Summary
+      - name: Trivy JSON (for summary)
         run: |
-          COUNT=$(jq '[.runs[].results] | map(length) | add' trivy.sarif)
-          test "${COUNT:-0}" -eq 0
+          trivy fs "$APP_DIR" \
+            --scanners vuln \
+            --format json \
+            --output trivy.json \
+            --severity "$SEVERITY" \
+            --ignore-unfixed=$IGNORE_UNFIXED \
+            --exit-code 0
+
+      - name: Build Job Summary
+        run: |
+          if [ -f trivy.json ]; then
+            TOTAL=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy.json 2>/dev/null || echo 0)
+            H=$(jq '[.Results[]?.Vulnerabilities[]?|select(.Severity=="HIGH")] | length' trivy.json 2>/dev/null || echo 0)
+            C=$(jq '[.Results[]?.Vulnerabilities[]?|select(.Severity=="CRITICAL")] | length' trivy.json 2>/dev/null || echo 0)
+          else
+            TOTAL=0; H=0; C=0
+          fi
+
+          STATUS="🟢 Sin hallazgos en $SEVERITY"
+          [ "$TOTAL" -gt 0 ] && STATUS="🟠 $TOTAL hallazgos ($SEVERITY)"
+          [ "$C" -gt 0 ] && STATUS="🔴 $TOTAL hallazgos ($SEVERITY)"
+
+          {
+            echo "## 🔍 Trivy SCA (Dependencies)"
+            echo ""
+            echo "- **Severidades**: \`$SEVERITY\`  •  **Ignore unfixed**: \`$IGNORE_UNFIXED\`"
+            echo ""
+            echo "| Estado | Total | HIGH | CRITICAL |"
+            echo "|:--:|--:|--:|--:|"
+            echo "| $STATUS | $TOTAL | $H | $C |"
+            echo ""
+            echo "> Reporte SARIF subido a **Code scanning alerts** (pestaña *Security*)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$FAIL_ON_FINDINGS" = "true" ] && [ "$TOTAL" -gt 0 ]; then
+            echo "Se configuró fail_on_findings=true y hay hallazgos ($TOTAL)."
+            exit 1
+          fi
