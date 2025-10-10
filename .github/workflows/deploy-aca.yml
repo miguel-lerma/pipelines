@@ -1,3 +1,4 @@
+---
 name: deploy-aca
 on:
   workflow_call:
@@ -7,7 +8,7 @@ on:
       resource_group:  { type: string, required: true }
       location:        { type: string, required: true }
       aca_environment: { type: string, required: true }
-      acr_login_server: { type: string, required: true }
+      acr_login_server:{ type: string, required: true }
       acr_name:        { type: string, required: true }
       target_port:     { type: string, required: true }
       ingress:         { type: string, required: false, default: "internal" } # BE=internal, FE=external
@@ -33,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       app_fqdn: ${{ steps.out.outputs.app_fqdn }}
-      used_image: ${{ steps.out.outputs.used_image }}
+      used_image: ${{ steps.img.outputs.effective }}
     steps:
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -60,7 +61,7 @@ jobs:
           else
             EFF="$IMAGE_REF"
           fi
-          echo "effective=$EFF" >> $GITHUB_OUTPUT
+          echo "effective=$EFF" >> "$GITHUB_OUTPUT"
           echo "Using image: $EFF"
 
       - name: Ensure ACA Environment
@@ -105,7 +106,7 @@ jobs:
         run: |
           az containerapp update \
             -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" \
-            --set-env-vars ${{ inputs.env_vars }}
+            --set-env-vars "${{ inputs.env_vars }}"
 
       - name: Apply Key Vault secret references (optional)
         env:
@@ -121,7 +122,7 @@ jobs:
           for r in refs:
             name = r.get("name","").strip()
             uri  = r.get("secret_uri","").strip()
-            if not name or not uri: 
+            if not name or not uri:
               continue
             subprocess.check_call([
               "az","containerapp","secret","set","-n",app,"-g",rg,"--secrets",f"{name}=keyvaultref:{uri}"
@@ -138,8 +139,8 @@ jobs:
         shell: bash
         run: |
           FQDN=$(az containerapp show -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" --query "properties.configuration.ingress.fqdn" -o tsv || true)
-          echo "app_fqdn=$FQDN" >> $GITHUB_OUTPUT
-          echo "used_image=${{ steps.img.outputs.effective }}" >> $GITHUB_OUTPUT
+          echo "app_fqdn=$FQDN" >> "$GITHUB_OUTPUT"
+          echo "used_image=${{ steps.img.outputs.effective }}" >> "$GITHUB_OUTPUT"
           if [ -n "$FQDN" ] && [ "$FQDN" != "None" ]; then
             echo "FQDN: https://$FQDN"
           else
