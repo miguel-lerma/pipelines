@@ -1,24 +1,65 @@
 ---
 name: deploy-aca
+
 on:
   workflow_call:
     inputs:
-      app_name:        { type: string, required: true }
-      image_ref:       { type: string, required: true } # e.g. itxzacrlab01.azurecr.io/archetype-back:develop
-      resource_group:  { type: string, required: true }
-      location:        { type: string, required: true }
-      aca_environment: { type: string, required: true }
-      acr_login_server: { type: string, required: true }
-      acr_name:        { type: string, required: true }
-      target_port:     { type: string, required: true }
-      ingress:         { type: string, required: false, default: "internal" } # BE=internal, FE=external
-      cpu:             { type: string, required: false, default: "0.25" }
-      memory:          { type: string, required: false, default: "0.5Gi" }
-      min_replicas:    { type: number, required: false, default: 0 }
-      max_replicas:    { type: number, required: false, default: 1 }
-      env_vars:        { type: string, required: false, default: "" } # "K=V K2=V2"
-      keyvault_refs:   { type: string, required: false, default: "[]" } # JSON [{name, secret_uri}]
-      digest:          { type: string, required: false, default: "" }   # sha256:... (opcional)
+      app_name:
+        type: string
+        required: true
+      image_ref:
+        type: string
+        required: true
+      resource_group:
+        type: string
+        required: true
+      location:
+        type: string
+        required: true
+      aca_environment:
+        type: string
+        required: true
+      acr_login_server:
+        type: string
+        required: true
+      acr_name:
+        type: string
+        required: true
+      target_port:
+        type: string
+        required: true
+      ingress:
+        type: string
+        required: false
+        default: "internal"
+      cpu:
+        type: string
+        required: false
+        default: "0.25"
+      memory:
+        type: string
+        required: false
+        default: "0.5Gi"
+      min_replicas:
+        type: number
+        required: false
+        default: 0
+      max_replicas:
+        type: number
+        required: false
+        default: 1
+      env_vars:
+        type: string
+        required: false
+        default: ""
+      keyvault_refs:
+        type: string
+        required: false
+        default: "[]"
+      digest:
+        type: string
+        required: false
+        default: ""
     outputs:
       app_fqdn:
         value: ${{ jobs.deploy.outputs.app_fqdn }}
@@ -35,6 +76,7 @@ jobs:
     outputs:
       app_fqdn: ${{ steps.out.outputs.app_fqdn }}
       used_image: ${{ steps.img.outputs.effective }}
+
     steps:
       - name: Azure Login (OIDC)
         uses: azure/login@v2
@@ -46,14 +88,15 @@ jobs:
       - name: Ensure containerapp extension
         uses: azure/CLI@v2
         with:
-          inlineScript: az extension add -n containerapp --upgrade || true
+          inlineScript: |
+            az extension add -n containerapp --upgrade || true
 
       - name: Compute effective image
         id: img
         shell: bash
         env:
           IMAGE_REF: ${{ inputs.image_ref }}
-          DIGEST:    ${{ inputs.digest }}
+          DIGEST: ${{ inputs.digest }}
         run: |
           set -e
           if [ -n "$DIGEST" ]; then
@@ -67,8 +110,13 @@ jobs:
       - name: Ensure ACA Environment
         shell: bash
         run: |
-          az containerapp env show -n "${{ inputs.aca_environment }}" -g "${{ inputs.resource_group }}" >/dev/null 2>&1 || \
-          az containerapp env create -n "${{ inputs.aca_environment }}" -g "${{ inputs.resource_group }}" -l "${{ inputs.location }}"
+          az containerapp env show \
+            -n "${{ inputs.aca_environment }}" \
+            -g "${{ inputs.resource_group }}" >/dev/null 2>&1 || \
+          az containerapp env create \
+            -n "${{ inputs.aca_environment }}" \
+            -g "${{ inputs.resource_group }}" \
+            -l "${{ inputs.location }}"
 
       - name: Create app if missing (system MI + ACR bind)
         shell: bash
@@ -115,30 +163,47 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, subprocess, sys
-          refs = json.loads(os.getenv("KV_REFS","[]"))
-          if not refs: sys.exit(0)
+          refs = json.loads(os.getenv("KV_REFS", "[]"))
+          if not refs:
+              sys.exit(0)
+
           app = "${{ inputs.app_name }}"
           rg  = "${{ inputs.resource_group }}"
+
+          # Crea secretos desde Key Vault refs
           for r in refs:
-            name = r.get("name","").strip()
-            uri  = r.get("secret_uri","").strip()
-            if not name or not uri:
-              continue
-            subprocess.check_call([
-              "az","containerapp","secret","set","-n",app,"-g",rg,"--secrets",f"{name}=keyvaultref:{uri}"
-            ])
-          env_pairs = [ f'{r["name"]}=secretref:{r["name"]}' for r in refs if r.get("name") ]
+              name = (r.get("name") or "").strip()
+              uri  = (r.get("secret_uri") or "").strip()
+              if not name or not uri:
+                  continue
+              subprocess.check_call([
+                  "az", "containerapp", "secret", "set",
+                  "-n", app, "-g", rg,
+                  "--secrets", f"{name}=keyvaultref:{uri}",
+              ])
+
+          # Expone cada secreto como env var "secretref:<name>"
+          env_pairs = []
+          for r in refs:
+              name = (r.get("name") or "").strip()
+              if name:
+                  env_pairs.append(f"{name}=secretref:{name}")
+
           if env_pairs:
-            subprocess.check_call([
-              "az","containerapp","update","-n",app,"-g",rg,"--set-env-vars", *env_pairs
-            ])
+              subprocess.check_call(
+                  ["az", "containerapp", "update",
+                   "-n", app, "-g", rg, "--set-env-vars", *env_pairs]
+              )
           PY
 
       - name: Output
         id: out
         shell: bash
         run: |
-          FQDN=$(az containerapp show -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" --query "properties.configuration.ingress.fqdn" -o tsv || true)
+          FQDN=$(az containerapp show \
+            -n "${{ inputs.app_name }}" \
+            -g "${{ inputs.resource_group }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv || true)
           echo "app_fqdn=$FQDN" >> "$GITHUB_OUTPUT"
           echo "used_image=${{ steps.img.outputs.effective }}" >> "$GITHUB_OUTPUT"
           if [ -n "$FQDN" ] && [ "$FQDN" != "None" ]; then
