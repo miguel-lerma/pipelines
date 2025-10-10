@@ -1,0 +1,147 @@
+name: deploy-aca
+on:
+  workflow_call:
+    inputs:
+      app_name:        { type: string, required: true }
+      image_ref:       { type: string, required: true } # e.g. itxzacrlab01.azurecr.io/archetype-back:develop
+      resource_group:  { type: string, required: true }
+      location:        { type: string, required: true }
+      aca_environment: { type: string, required: true }
+      acr_login_server:{ type: string, required: true }
+      acr_name:        { type: string, required: true }
+      target_port:     { type: string, required: true }
+      ingress:         { type: string, required: false, default: "internal" } # BE=internal, FE=external
+      cpu:             { type: string, required: false, default: "0.25" }
+      memory:          { type: string, required: false, default: "0.5Gi" }
+      min_replicas:    { type: number, required: false, default: 0 }
+      max_replicas:    { type: number, required: false, default: 1 }
+      env_vars:        { type: string, required: false, default: "" } # "K=V K2=V2"
+      keyvault_refs:   { type: string, required: false, default: "[]" } # JSON [{name, secret_uri}]
+      digest:          { type: string, required: false, default: "" }   # sha256:... (opcional)
+    outputs:
+      app_fqdn:
+        value: ${{ jobs.deploy.outputs.app_fqdn }}
+      used_image:
+        value: ${{ jobs.deploy.outputs.used_image }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    outputs:
+      app_fqdn: ${{ steps.out.outputs.app_fqdn }}
+      used_image: ${{ steps.out.outputs.used_image }}
+    steps:
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure containerapp extension
+        uses: azure/CLI@v2
+        with:
+          inlineScript: az extension add -n containerapp --upgrade || true
+
+      - name: Compute effective image
+        id: img
+        shell: bash
+        env:
+          IMAGE_REF: ${{ inputs.image_ref }}
+          DIGEST:    ${{ inputs.digest }}
+        run: |
+          set -e
+          if [ -n "$DIGEST" ]; then
+            EFF="${IMAGE_REF%@*}@${DIGEST}"
+          else
+            EFF="$IMAGE_REF"
+          fi
+          echo "effective=$EFF" >> $GITHUB_OUTPUT
+          echo "Using image: $EFF"
+
+      - name: Ensure ACA Environment
+        shell: bash
+        run: |
+          az containerapp env show -n "${{ inputs.aca_environment }}" -g "${{ inputs.resource_group }}" >/dev/null 2>&1 || \
+          az containerapp env create -n "${{ inputs.aca_environment }}" -g "${{ inputs.resource_group }}" -l "${{ inputs.location }}"
+
+      - name: Create app if missing (system MI + ACR bind)
+        shell: bash
+        run: |
+          if ! az containerapp show -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" >/dev/null 2>&1; then
+            az containerapp create \
+              -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" \
+              --environment "${{ inputs.aca_environment }}" \
+              --image "${{ steps.img.outputs.effective }}" \
+              --ingress "${{ inputs.ingress }}" --target-port "${{ inputs.target_port }}" \
+              --cpu "${{ inputs.cpu }}" --memory "${{ inputs.memory }}" \
+              --min-replicas "${{ inputs.min_replicas }}" --max-replicas "${{ inputs.max_replicas }}" \
+              --registry-server "${{ inputs.acr_login_server }}" --registry-identity system \
+              --assign-identity system
+          fi
+
+      - name: Update image & resources (enforce ingress)
+        shell: bash
+        run: |
+          az containerapp update \
+            -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" \
+            --image "${{ steps.img.outputs.effective }}" \
+            --cpu "${{ inputs.cpu }}" --memory "${{ inputs.memory }}" \
+            --min-replicas "${{ inputs.min_replicas }}" --max-replicas "${{ inputs.max_replicas }}"
+          az containerapp ingress set \
+            -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" \
+            --type "${{ inputs.ingress }}" --target-port "${{ inputs.target_port }}"
+          az containerapp registry set \
+            -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" \
+            --server "${{ inputs.acr_login_server }}" --identity system
+
+      - name: Apply simple env vars (if any)
+        if: ${{ inputs.env_vars != '' }}
+        shell: bash
+        run: |
+          az containerapp update \
+            -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" \
+            --set-env-vars ${{ inputs.env_vars }}
+
+      - name: Apply Key Vault secret references (optional)
+        env:
+          KV_REFS: ${{ inputs.keyvault_refs }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, subprocess, sys
+          refs = json.loads(os.getenv("KV_REFS","[]"))
+          if not refs: sys.exit(0)
+          app = "${{ inputs.app_name }}"
+          rg  = "${{ inputs.resource_group }}"
+          for r in refs:
+            name = r.get("name","").strip()
+            uri  = r.get("secret_uri","").strip()
+            if not name or not uri: 
+              continue
+            subprocess.check_call([
+              "az","containerapp","secret","set","-n",app,"-g",rg,"--secrets",f"{name}=keyvaultref:{uri}"
+            ])
+          env_pairs = [ f'{r["name"]}=secretref:{r["name"]}' for r in refs if r.get("name") ]
+          if env_pairs:
+            subprocess.check_call([
+              "az","containerapp","update","-n",app,"-g",rg,"--set-env-vars", *env_pairs
+            ])
+          PY
+
+      - name: Output
+        id: out
+        shell: bash
+        run: |
+          FQDN=$(az containerapp show -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" --query "properties.configuration.ingress.fqdn" -o tsv || true)
+          echo "app_fqdn=$FQDN" >> $GITHUB_OUTPUT
+          echo "used_image=${{ steps.img.outputs.effective }}" >> $GITHUB_OUTPUT
+          if [ -n "$FQDN" ] && [ "$FQDN" != "None" ]; then
+            echo "FQDN: https://$FQDN"
+          else
+            echo "No FQDN (ingress puede ser internal)."
+          fi
