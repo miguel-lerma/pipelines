@@ -7,7 +7,7 @@ on:
       resource_group:  { type: string, required: true }
       location:        { type: string, required: true }
       aca_environment: { type: string, required: true }
-      acr_login_server:{ type: string, required: true }
+      acr_login_server: { type: string, required: true }
       acr_name:        { type: string, required: true }
       target_port:     { type: string, required: true }
       ingress:         { type: string, required: false, default: "internal" } # BE=internal, FE=external
