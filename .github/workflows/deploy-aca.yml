@@ -211,3 +211,4 @@ jobs:
           else
             echo "No FQDN (ingress puede ser internal)."
           fi
+    
