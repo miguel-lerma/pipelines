@@ -1,6 +1,5 @@
 ---
 name: Reusable - Deploy to Azure Container Apps
-
 on:
   workflow_call:
     inputs:
@@ -32,7 +31,6 @@ on:
         type: string
         required: true
         description: "Imagen final a desplegar (registry/name:tag)"
-      # NUEVOS inputs para controlar build context y Dockerfile
       context:
         type: string
         required: false
@@ -86,20 +84,16 @@ on:
         required: true
       azure_subscription_id:
         required: true
-
 permissions:
   contents: read
   id-token: write
-
 jobs:
   deploy:
     name: Deploy to ACA
     runs-on: ubuntu-24.04
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
@@ -107,14 +101,12 @@ jobs:
           tenant-id: ${{ secrets.azure_tenant_id }}
           subscription-id: ${{ secrets.azure_subscription_id }}
           audience: api://AzureADTokenExchange
-
       - name: Ensure containerapp extension
         uses: azure/CLI@v2
         with:
           azcliversion: agentazcliversion
           inlineScript: |
             az extension add -n containerapp --upgrade || true
-
       - name: Preflight - validar variables requeridas
         shell: bash
         run: |
@@ -136,7 +128,6 @@ jobs:
               exit 1
             fi
           done
-
       - name: ACR login
         shell: bash
         env:
@@ -151,7 +142,6 @@ jobs:
             TOKEN="$(az acr login --name "$ACR_NAME" --expose-token --query accessToken -o tsv)"
             echo "$TOKEN" | docker login "$ACR_LOGIN_SERVER" -u 00000000-0000-0000-0000-000000000000 --password-stdin
           fi
-
       - name: Build & push image
         shell: bash
         env:
@@ -164,7 +154,6 @@ jobs:
           docker build -t "$IMAGE" "$CONTEXT" -f "$DOCKERFILE"
           echo "🚀 docker push \"$IMAGE\""
           docker push "$IMAGE"
-
       - name: Ensure ACA Environment exists
         shell: bash
         env:
@@ -176,7 +165,6 @@ jobs:
           if ! az containerapp env show -n "$ENV_NAME" -g "$RG" >/dev/null 2>&1; then
             az containerapp env create -n "$ENV_NAME" -g "$RG" -l "$LOCATION"
           fi
-
       - name: Ensure identity + AcrPull + registry binding
         shell: bash
         env:
@@ -186,9 +174,7 @@ jobs:
           ACR_NAME: ${{ inputs.acr_name }}
         run: |
           set -euo pipefail
-
           ACR_ID="$(az acr show -n "$ACR_NAME" -g "$RG" --query id -o tsv)"
-
           if az containerapp show -n "$APP" -g "$RG" >/dev/null 2>&1; then
             CA_MI="$(az containerapp show -n "$APP" -g "$RG" --query "identity.principalId" -o tsv || echo "")"
             if [ -z "$CA_MI" ] || [ "$CA_MI" = "None" ]; then
@@ -201,7 +187,6 @@ jobs:
             fi
             az containerapp registry set -n "$APP" -g "$RG" --server "$REGISTRY" --identity system >/dev/null
           fi
-
       - name: Create or Update Container App
         shell: bash
         env:
@@ -219,12 +204,9 @@ jobs:
           EXTRA_ENV_RAW: ${{ inputs.extra_env }}
         run: |
           set -euo pipefail
-
-          # Construir lista de env vars como "K=V,K=V"
           IMAGE_TAG="IMAGE_TAG=${GITHUB_SHA}"
           EXTRA_ENV_COMMA=""
           if [ -n "$EXTRA_ENV_RAW" ]; then
-            # Quitar líneas vacías y comentarios, unir con comas
             EXTRA_ENV_COMMA="$(printf '%s\n' "$EXTRA_ENV_RAW" | awk 'NF && $0 !~ /^#/ { gsub(/\r$/,""); out = (out==""?$0:out","$0) } END { print out }')"
           fi
           if [ -n "$EXTRA_ENV_COMMA" ]; then
@@ -232,12 +214,10 @@ jobs:
           else
             ENV_VARS="${IMAGE_TAG}"
           fi
-
           TP_ARGS=()
           if [ -n "$TARGET_PORT" ]; then
             TP_ARGS+=(--target-port "$TARGET_PORT")
           fi
-
           if az containerapp show -n "$APP" -g "$RG" >/dev/null 2>&1; then
             echo "🔄 Actualizando Container App…"
             az containerapp update \
@@ -260,7 +240,6 @@ jobs:
               --min-replicas "$MIN_REP" --max-replicas "$MAX_REP" \
               --set-env-vars "$ENV_VARS"
           fi
-
       - name: Mostrar imagen final y FQDN
         shell: bash
         env:
@@ -275,4 +254,3 @@ jobs:
           else
             echo "ℹ️  El Container App no reporta FQDN (puede ser ingress=internal o ambiente sin DNS)."
           fi
-
