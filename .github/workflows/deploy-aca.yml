@@ -1,4 +1,3 @@
----
 name: Reusable - Deploy to Azure Container Apps
 
 on:
@@ -79,9 +78,7 @@ on:
 
 jobs:
   deploy:
-    # Aplica el Environment si te lo pasan (habilita vars.* y protecciones)
     environment: ${{ inputs.environment || '' }}
-
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -91,7 +88,7 @@ jobs:
       - name: Checkout repo (pipelines)
         uses: actions/checkout@v4
 
-      # --- Lint opcional (puedes dejarlo o quitarlo si no lo quieres) ---
+      # --- Lint opcional ---
       - name: Write .yamllint config
         run: |
           cat > .yamllint.yml <<'CFG'
@@ -130,26 +127,43 @@ jobs:
           tenant-id: ${{ inputs.azure_tenant_id }}
           subscription-id: ${{ inputs.azure_subscription_id }}
 
-      - name: Ensure ACA Env exists (no-op if exists)
+      # --- VALIDACIÓN: no crear nada, solo comprobar que existe ---
+      - name: Validate existing infra (no mutations)
         shell: bash
+        env:
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          ACA_ENVIRONMENT: ${{ inputs.aca_environment }}
+          LOCATION: ${{ inputs.location }}
+          APP_NAME: ${{ inputs.app_name }}
+          ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
         run: |
           set -euo pipefail
-          az group show -n "${{ inputs.resource_group }}" >/dev/null 2>&1 || {
-            echo "Resource group '${{ inputs.resource_group }}' no existe. Creándolo…"
-            az group create -n "${{ inputs.resource_group }}" -l "${{ inputs.location }}"
-          }
+          : "${RESOURCE_GROUP:?missing input 'resource_group'}"
+          : "${ACA_ENVIRONMENT:?missing input 'aca_environment'}"
+          : "${LOCATION:?missing input 'location'}"
+          : "${APP_NAME:?missing input 'app_name'}"
 
-          # Crea el ACA Environment si no existe (silent si ya existe)
-          if ! az containerapp env show \
-            -g "${{ inputs.resource_group }}" \
-            -n "${{ inputs.aca_environment }}" >/dev/null 2>&1; then
-            echo "Creando Azure Container Apps Environment '${{ inputs.aca_environment }}'…"
-            az containerapp env create \
-              -g "${{ inputs.resource_group }}" \
-              -n "${{ inputs.aca_environment }}" \
-              -l "${{ inputs.location }}"
-          else
-            echo "ACA Environment '${{ inputs.aca_environment }}' ya existe."
+          echo "🔎 Validando Resource Group..."
+          if ! az group show -n "$RESOURCE_GROUP" -o none; then
+            echo "❌ Resource group '$RESOURCE_GROUP' no existe. Este workflow NO crea infraestructura."; exit 2
+          fi
+
+          echo "🔎 Validando ACA Environment..."
+          if ! az containerapp env show -g "$RESOURCE_GROUP" -n "$ACA_ENVIRONMENT" -o none; then
+            echo "❌ ACA env '$ACA_ENVIRONMENT' no existe en RG '$RESOURCE_GROUP'. Créalo fuera del pipeline."; exit 2
+          fi
+
+          echo "🔎 Validando Container App..."
+          if ! az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" -o none; then
+            echo "❌ La Container App '$APP_NAME' no existe en RG '$RESOURCE_GROUP'. Créala fuera del pipeline."; exit 2
+          fi
+
+          if [[ -n "${ACR_LOGIN_SERVER:-}" ]]; then
+            ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
+            echo "🔎 Validando ACR '$ACR_NAME'..."
+            if ! az acr show -n "$ACR_NAME" -o none; then
+              echo "❌ ACR '$ACR_NAME' no existe. Créalo/configúralo fuera del pipeline."; exit 2
+            fi
           fi
 
       - name: Build env var block
@@ -157,84 +171,63 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Convierte el bloque extra_env (KEY=VALUE por línea) en parámetros --env para az
           PARAMS=()
           if [[ -n "${{ inputs.extra_env }}" ]]; then
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
-              # Split en el primer '='
-              key="${line%%=*}"
-              val="${line#*=}"
-              # Trim espacios
-              key="$(echo "$key" | xargs)"
-              val="$(echo "$val" | xargs)"
-              [[ -z "$key" ]] && continue
-              PARAMS+=( --env "$key=$val" )
+              # Usamos --set-env-vars (admite múltiples pares KEY=VAL separados por espacios)
+              PARAMS+=( --set-env-vars "$line" )
             done <<< "${{ inputs.extra_env }}"
           fi
-
-          # Exporta como output serializado (espacios seguros)
           printf '%s\0' "${PARAMS[@]}" > envparams.bin
           echo "file=envparams.bin" >> "$GITHUB_OUTPUT"
 
-      - name: Create/Update Container App
+      # --- Solo actualización: nada de 'create' ni 'up' ---
+      - name: Update existing Container App
         shell: bash
+        env:
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          APP_NAME: ${{ inputs.app_name }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+          INGRESS: ${{ inputs.ingress }}
+          TARGET_PORT: ${{ inputs.target_port }}
+          CPU: ${{ inputs.cpu }}
+          MEMORY: ${{ inputs.memory }}
+          MIN_REPLICAS: ${{ inputs.min_replicas }}
+          MAX_REPLICAS: ${{ inputs.max_replicas }}
+          ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
+          ACR_IDENTITY_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
         run: |
           set -euo pipefail
-
-          # Recupera los --env serializados
           readarray -d '' ENV_PARAMS < "${{ steps.envblk.outputs.file }}"
 
-          # Si nos pasaron registry, lo añadimos (opcional)
-          if [[ -n "${{ inputs.acr_login_server }}" ]]; then
-            echo "Configurando registry ${{
-              inputs.acr_login_server
-            }} en la app (si no existiera aún)…"
-            # Nota: requiere identidad con permiso AcrPull en el ACR si se usa identidad asignada
-            if [[ -n "${{ inputs.acr_identity_client_id }}" ]]; then
+          # (Opcional) Configurar registry si fue provisto (esto es configuración, no creación)
+          if [[ -n "${ACR_LOGIN_SERVER:-}" ]]; then
+            if [[ -n "${ACR_IDENTITY_CLIENT_ID:-}" ]]; then
               az containerapp registry set \
-                -g "${{ inputs.resource_group }}" \
-                -n "${{ inputs.app_name }}" \
-                --server "${{ inputs.acr_login_server }}" \
-                --identity "${{ inputs.acr_identity_client_id }}" \
+                -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+                --server "$ACR_LOGIN_SERVER" \
+                --identity "$ACR_IDENTITY_CLIENT_ID" \
                 --yes || true
             else
               az containerapp registry set \
-                -g "${{ inputs.resource_group }}" \
-                -n "${{ inputs.app_name }}" \
-                --server "${{ inputs.acr_login_server }}" \
+                -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+                --server "$ACR_LOGIN_SERVER" \
                 --yes || true
             fi
           fi
 
-          # Crea/actualiza la Container App
-          if ! az containerapp show -g "${{ inputs.resource_group }}" -n "${{ inputs.app_name }}" >/dev/null 2>&1; then
-            echo "Creando Container App '${{ inputs.app_name }}'…"
-            az containerapp create \
-              -g "${{ inputs.resource_group }}" \
-              -n "${{ inputs.app_name }}" \
-              --environment "${{ inputs.aca_environment }}" \
-              --image "${{ inputs.image_ref }}" \
-              --ingress "${{ inputs.ingress }}" \
-              --target-port "${{ inputs.target_port }}" \
-              --cpu "${{ inputs.cpu }}" \
-              --memory "${{ inputs.memory }}" \
-              --min-replicas "${{ inputs.min_replicas }}" \
-              --max-replicas "${{ inputs.max_replicas }}" \
-              "${ENV_PARAMS[@]}"
-          else
-            echo "Actualizando Container App '${{ inputs.app_name }}'…"
-            az containerapp update \
-              -g "${{ inputs.resource_group }}" \
-              -n "${{ inputs.app_name }}" \
-              --image "${{ inputs.image_ref }}" \
-              --ingress "${{ inputs.ingress }}" \
-              --target-port "${{ inputs.target_port }}" \
-              --cpu "${{ inputs.cpu }}" \
-              --memory "${{ inputs.memory }}" \
-              --min-replicas "${{ inputs.min_replicas }}" \
-              --max-replicas "${{ inputs.max_replicas }}" \
-              "${ENV_PARAMS[@]}"
-          fi
+          # Actualiza imagen + env (y, si quieres, recursos/escala/ingress)
+          az containerapp update \
+            -g "$RESOURCE_GROUP" \
+            -n "$APP_NAME" \
+            --image "$IMAGE_REF" \
+            --ingress "$INGRESS" \
+            --target-port "$TARGET_PORT" \
+            --cpu "$CPU" \
+            --memory "$MEMORY" \
+            --min-replicas "$MIN_REPLICAS" \
+            --max-replicas "$MAX_REPLICAS" \
+            "${ENV_PARAMS[@]}"
 
-          echo "Despliegue completado."
+          echo "✅ Despliegue (update) completado."
