@@ -1,0 +1,97 @@
+---
+name: Docker Image Publish
+
+on:
+  workflow_call:
+    inputs:
+      app_dir:
+        type: string
+        required: true
+        description: 'Directorio de la app (contexto de build), p.ej: "." o "backend"'
+      dockerfile:
+        type: string
+        required: false
+        default: Dockerfile
+        description: 'Ruta del Dockerfile relativa a app_dir'
+      acr_login_server:
+        type: string
+        required: true
+        description: 'Servidor de ACR. Ej: itxzacrlab01.azurecr.io'
+      image_name:
+        type: string
+        required: true
+        description: 'Nombre de la imagen en el registro. Ej: myapp-api'
+      build_args:
+        type: string
+        required: false
+        default: ''
+        description: 'Build args (formato multilinea key=value)'
+      extra_tags:
+        type: string
+        required: false
+        default: ''
+        description: 'Tags adicionales (separados por saltos de línea)'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Azure OIDC login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: ACR login (az acr login)
+        env:
+          ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
+        run: |
+          REG_NAME="${ACR_LOGIN_SERVER%%.*}"
+          az acr login --name "$REG_NAME"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker metadata (tags y labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.acr_login_server }}/${{ inputs.image_name }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+            ${{ inputs.extra_tags }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ inputs.app_dir }}
+          file: ${{ inputs.app_dir }}/${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
+          build-args: |
+            ${{ inputs.build_args }}
+
+      - name: Summary
+        run: |
+          {
+            echo "## Image pushed"
+            echo "- **Registry**: ${{ inputs.acr_login_server }}"
+            echo "- **Image**:    ${{ inputs.image_name }}"
+            echo "- **Tags**:"
+            printf '%s\n' "${{ steps.meta.outputs.tags }}"
+          } >> "$GITHUB_STEP_SUMMARY"
