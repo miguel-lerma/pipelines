@@ -165,7 +165,7 @@ jobs:
               --max-replicas "${MAX_REPLICAS}" \
               --cpu "${CPU}" \
               --memory "${MEMORY}" \
-              ${ENV_ARGS}
+              "${ENV_ARGS}"
           else
             az containerapp create \
               -g "${RG}" \
@@ -178,7 +178,7 @@ jobs:
               --max-replicas "${MAX_REPLICAS}" \
               --cpu "${CPU}" \
               --memory "${MEMORY}" \
-              ${ENV_ARGS}
+              "${ENV_ARGS}"
           fi
 
       - name: Get FQDN
