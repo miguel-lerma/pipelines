@@ -4,94 +4,90 @@ name: Reusable - Deploy to Azure Container Apps
 on:
   workflow_call:
     inputs:
-      aca_environment:
-        description: Azure Container Apps Environment name
+      # ---- Credenciales OIDC (pásalas desde el workflow del proyecto con vars.*) ----
+      azure_client_id:
+        description: "App registration (client) ID"
         required: true
         type: string
+      azure_tenant_id:
+        description: "Tenant ID"
+        required: true
+        type: string
+      azure_subscription_id:
+        description: "Subscription ID"
+        required: true
+        type: string
+
+      # ---- Destino en Azure ----
       resource_group:
-        description: Azure Resource Group
+        required: true
+        type: string
+      aca_environment:
+        description: "Nombre del Azure Container Apps Environment"
         required: true
         type: string
       location:
-        description: Azure location (e.g. eastus)
         required: true
         type: string
 
-      acr_name:
-        description: Azure Container Registry name (short, no FQDN)
-        required: true
-        type: string
-      acr_login_server:
-        description: ACR login server (e.g. contoso.azurecr.io)
-        required: true
-        type: string
-
+      # ---- App e imagen ----
       app_name:
-        description: Container App name
         required: true
         type: string
       image_ref:
-        description: Full image reference (e.g. contoso.azurecr.io/app:tag)
+        description: "Ej: <acr>.azurecr.io/<repo>:<tag>"
         required: true
         type: string
 
-      # Build (opcional, si quieres construir la imagen aquí)
-      context:
-        description: Docker build context
-        required: false
-        type: string
-        default: .
-      dockerfile:
-        description: Dockerfile path
-        required: false
-        type: string
-        default: ./Dockerfile
-
+      # ---- Ingress y puerto ----
       ingress:
-        description: "Ingress: internal|external|disabled"
+        description: "internal | external"
         required: false
-        type: string
         default: internal
+        type: string
       target_port:
-        description: Container port
-        required: false
+        description: "Puerto de escucha del contenedor (string)"
+        required: true
         type: string
-        default: "3000"
 
+      # ---- Escala y recursos (strings) ----
       cpu:
-        description: vCPU
-        required: false
+        required: true
         type: string
-        default: "0.25"
       memory:
-        description: Memory (e.g. 0.5Gi, 1Gi)
-        required: false
+        required: true
         type: string
-        default: "0.5Gi"
       min_replicas:
-        description: Min replicas
-        required: false
+        required: true
         type: string
-        default: "0"
       max_replicas:
-        description: Max replicas
-        required: false
+        required: true
         type: string
-        default: "1"
 
+      # ---- Variables de app (bloque multi-línea KEY=VAL por línea) ----
       extra_env:
-        description: "Multi-line KEY=VALUE list"
         required: false
-        type: string
         default: ""
+        type: string
 
-    secrets:
-      AZURE_CLIENT_ID:
-        required: true
-      AZURE_TENANT_ID:
-        required: true
-      AZURE_SUBSCRIPTION_ID:
-        required: true
+      # ---- (Opcional) credenciales de registro para pull si no hay identidad configurada ----
+      acr_login_server:
+        required: false
+        default: ""
+        type: string
+      acr_username:
+        required: false
+        default: ""
+        type: string
+      acr_password:
+        required: false
+        default: ""
+        type: string
+
+    outputs:
+      app-url:
+        description: "FQDN de la Container App"
+        value: ${{ jobs.deploy.outputs.app-url }}
 
 permissions:
   id-token: write
@@ -99,122 +95,96 @@ permissions:
 
 jobs:
   deploy:
-    name: Build (optional) & Deploy
     runs-on: ubuntu-latest
+    outputs:
+      app-url: ${{ steps.get-url.outputs.url }}
 
     steps:
-      - name: Checkout (pipelines repo for lint jobs only)
+      - name: Checkout (shallow)
         uses: actions/checkout@v4
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ inputs.azure_client_id }}
+          tenant-id: ${{ inputs.azure_tenant_id }}
+          subscription-id: ${{ inputs.azure_subscription_id }}
 
-      - name: Ensure providers and extension
-        shell: bash
+      - name: Ensure Container Apps extension
         run: |
           set -euo pipefail
-          az provider register --namespace Microsoft.App --wait
-          az provider register --namespace Microsoft.OperationalInsights --wait
-          az extension add --name containerapp --upgrade
+          az extension add -n containerapp --yes
+          az provider register --namespace Microsoft.App
+          az provider register --namespace Microsoft.OperationalInsights
 
-      - name: ACR login
-        shell: bash
+      - name: (Optional) Configure registry creds for pull
+        if: ${{ inputs.acr_login_server != '' && inputs.acr_username != '' && inputs.acr_password != '' }}
         run: |
           set -euo pipefail
-          az acr login --name "${{ inputs.acr_name }}"
-
-      # ----- OPCIONAL: construir y publicar imagen si quieres hacerlo en este workflow -----
-      - name: Docker build & push (optional)
-        if: ${{ inputs.context != '' && inputs.dockerfile != '' }}
-        uses: docker/build-push-action@v6
-        with:
-          context: ${{ inputs.context }}
-          file: ${{ inputs.dockerfile }}
-          push: true
-          tags: ${{ inputs.image_ref }}
-          provenance: false
-
-      - name: Ensure ACA Environment
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! az containerapp env show \
-              --name "${{ inputs.aca_environment }}" \
-              --resource-group "${{ inputs.resource_group }}" >/dev/null 2>&1; then
-            echo "Creating ACA Environment..."
-            az containerapp env create \
-              --name "${{ inputs.aca_environment }}" \
-              --resource-group "${{ inputs.resource_group }}" \
-              --location "${{ inputs.location }}"
-          else
-            echo "ACA Environment exists."
-          fi
+          # Intenta asociar credenciales de ACR a la app (si ya existe). Si no existe todavía, este paso fallaría:
+          az containerapp registry set \
+            -g "${{ inputs.resource_group }}" \
+            -n "${{ inputs.app_name }}" \
+            --server "${{ inputs.acr_login_server }}" \
+            --username "${{ inputs.acr_username }}" \
+            --password "${{ inputs.acr_password }}" || true
 
       - name: Create or Update Container App
-        shell: bash
         env:
           RG: ${{ inputs.resource_group }}
-          ENV_NAME: ${{ inputs.aca_environment }}
+          ACA_ENV: ${{ inputs.aca_environment }}
+          LOCATION: ${{ inputs.location }}
           APP_NAME: ${{ inputs.app_name }}
           IMAGE: ${{ inputs.image_ref }}
           INGRESS: ${{ inputs.ingress }}
           TARGET_PORT: ${{ inputs.target_port }}
           CPU: ${{ inputs.cpu }}
           MEMORY: ${{ inputs.memory }}
-          MIN_REP: ${{ inputs.min_replicas }}
-          MAX_REP: ${{ inputs.max_replicas }}
+          MIN_REPLICAS: ${{ inputs.min_replicas }}
+          MAX_REPLICAS: ${{ inputs.max_replicas }}
           EXTRA_ENV: ${{ inputs.extra_env }}
         run: |
           set -euo pipefail
 
-          # Parse env vars into --env KEY=VALUE --env KEY=VALUE ...
+          # Construye argumentos -e KEY=VAL usando array (evita globbing y respeta espacios)
           ENV_ARGS=()
-          if [[ -n "${EXTRA_ENV}" ]]; then
-            # shellcheck disable=SC2001
+          if [ -n "${EXTRA_ENV:-}" ]; then
             while IFS= read -r line; do
-              [[ -z "$line" ]] && continue
-              ENV_ARGS+=( --env "$line" )
+              [ -z "$line" ] && continue
+              ENV_ARGS+=(-e "$line")
             done <<< "${EXTRA_ENV}"
           fi
 
-          if az containerapp show --name "${APP_NAME}" --resource-group "${RG}" >/dev/null 2>&1; then
-            echo "Updating existing Container App: ${APP_NAME}"
+          if az containerapp show -g "${RG}" -n "${APP_NAME}" >/dev/null 2>&1; then
             az containerapp update \
-              --name "${APP_NAME}" \
-              --resource-group "${RG}" \
+              -g "${RG}" \
+              -n "${APP_NAME}" \
               --image "${IMAGE}" \
               --ingress "${INGRESS}" \
               --target-port "${TARGET_PORT}" \
+              --min-replicas "${MIN_REPLICAS}" \
+              --max-replicas "${MAX_REPLICAS}" \
               --cpu "${CPU}" \
               --memory "${MEMORY}" \
-              --min-replicas "${MIN_REP}" \
-              --max-replicas "${MAX_REP}" \
               "${ENV_ARGS[@]}"
           else
-            echo "Creating Container App: ${APP_NAME}"
             az containerapp create \
-              --name "${APP_NAME}" \
-              --resource-group "${RG}" \
-              --environment "${ENV_NAME}" \
+              -g "${RG}" \
+              -n "${APP_NAME}" \
+              --environment "${ACA_ENV}" \
               --image "${IMAGE}" \
               --ingress "${INGRESS}" \
               --target-port "${TARGET_PORT}" \
+              --min-replicas "${MIN_REPLICAS}" \
+              --max-replicas "${MAX_REPLICAS}" \
               --cpu "${CPU}" \
               --memory "${MEMORY}" \
-              --min-replicas "${MIN_REP}" \
-              --max-replicas "${MAX_REP}" \
-              --registry-server "${{ inputs.acr_login_server }}" \
               "${ENV_ARGS[@]}"
           fi
 
-      - name: Show Container App URL (if external)
-        if: ${{ inputs.ingress == 'external' }}
-        shell: bash
+      - name: Get FQDN
+        id: get-url
         run: |
           set -euo pipefail
-          FQDN=$(az containerapp show -n "${{ inputs.app_name }}" -g "${{ inputs.resource_group }}" --query properties.configuration.ingress.fqdn -o tsv)
-          echo "App FQDN: ${FQDN}"
+          URL=$(az containerapp show -g "${{ inputs.resource_group }}" -n "${{ inputs.app_name }}" --query properties.configuration.ingress.fqdn -o tsv || true)
+          echo "url=${URL}" >> "$GITHUB_OUTPUT"
