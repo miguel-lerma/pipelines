@@ -1,5 +1,4 @@
----
-name: Reusable - Build & Push Docker Image
+name: Docker Image Publish
 
 on:
   workflow_call:
@@ -7,106 +6,93 @@ on:
       app_dir:
         type: string
         required: true
-        description: "Directorio de la app donde está el Dockerfile"
+        description: 'Directorio de la app (contexto de build), p.ej: "." o "backend"'
       dockerfile:
         type: string
         required: false
-        default: "Dockerfile"
-      image_name:
-        type: string
-        required: true
-        description: "Nombre del repo en ACR (p.ej. archetype-back)"
+        default: Dockerfile
+        description: 'Ruta del Dockerfile relativa a app_dir'
       acr_login_server:
         type: string
         required: true
-        description: "p.ej. itxzacrlab01.azurecr.io"
-      environment_tag:
+        description: 'Servidor de ACR. Ej: itxzacrlab01.azurecr.io'
+      image_name:
         type: string
-        required: false
-        default: ""
-        description: "dev|staging|prod para tag móvil <env>-latest (opcional)"
+        required: true
+        description: 'Nombre de la imagen en el registro. Ej: myapp-api'
       build_args:
         type: string
         required: false
-        default: ""
-        description: "args opcionales: una por línea KEY=VALUE"
+        default: ''
+        description: 'Build args (formato multilinea key=value)'
+      extra_tags:
+        type: string
+        required: false
+        default: ''
+        description: 'Tags adicionales (separados por saltos de línea)'
 
-      # OIDC / Azure
-      azure_client_id:
-        type: string
-        required: true
-      azure_tenant_id:
-        type: string
-        required: true
-      azure_subscription_id:
-        type: string
-        required: true
+permissions:
+  contents: read
+  id-token: write   # necesario para azure/login si usas OIDC
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Azure Login (OIDC)
+      - name: Azure OIDC login
         uses: azure/login@v2
         with:
-          client-id: ${{ inputs.azure_client_id }}
-          tenant-id: ${{ inputs.azure_tenant_id }}
-          subscription-id: ${{ inputs.azure_subscription_id }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # ⚠️ Fix: mover el "recorte" del login server a bash (evita el error de actionlint)
       - name: ACR login (az acr login)
+        env:
+          ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
         run: |
-          az acr login --name "${{ inputs.acr_login_server%%.* }}"
+          REG_NAME="${ACR_LOGIN_SERVER%%.*}"   # 'itxzacrlab01' a partir de 'itxzacrlab01.azurecr.io'
+          az acr login --name "$REG_NAME"
 
-      - name: Build args → matriz
-        id: args
-        shell: bash
-        run: |
-          arr=()
-          if [[ -n "${{ inputs.build_args }}" ]]; then
-            while IFS= read -r line; do
-              [[ -z "$line" ]] && continue
-              arr+=( --build-arg "$line" )
-            done <<< "${{ inputs.build_args }}"
-          fi
-          printf '%s\0' "${arr[@]}" > args.bin
-          echo "file=args.bin" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Buildx
+      - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Compute tags
+      - name: Docker metadata (tags y labels)
         id: meta
-        shell: bash
-        run: |
-          IMAGE="${{ inputs.acr_login_server }}/${{ inputs.image_name }}"
-          SHA_TAG="sha-${GITHUB_SHA}"
-          TAGS="${IMAGE}:${SHA_TAG}"
-          if [[ -n "${{ inputs.environment_tag }}" ]]; then
-            TAGS="${TAGS},${IMAGE}:${{ inputs.environment_tag }}-latest"
-          fi
-          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ inputs.acr_login_server }}/${{ inputs.image_name }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+            ${{ inputs.extra_tags }}
 
-      - name: Docker build & push
+      - name: Build & push
         uses: docker/build-push-action@v6
         with:
           context: ${{ inputs.app_dir }}
           file: ${{ inputs.app_dir }}/${{ inputs.dockerfile }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           provenance: false
           sbom: false
-          build-args-file: ${{ steps.args.outputs.file }}
+          build-args: |
+            ${{ inputs.build_args }}
 
+      # ⚠️ Fix: agrupar redirecciones y entrecomillar para que no se queje shellcheck
       - name: Summary
         run: |
-          echo "## Image pushed" >> $GITHUB_STEP_SUMMARY
-          echo "- **Image**: ${{ steps.meta.outputs.image }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tags**:  ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Image pushed"
+            echo "- **Registry**: ${{ inputs.acr_login_server }}"
+            echo "- **Image**:    ${{ inputs.image_name }}"
+            echo "- **Tags**:"
+            printf '%s\n' "${{ steps.meta.outputs.tags }}"
+          } >> "$GITHUB_STEP_SUMMARY"
