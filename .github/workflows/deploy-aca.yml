@@ -1,3 +1,4 @@
+---
 name: Reusable - Deploy to Azure Container Apps
 
 on:
@@ -130,27 +131,27 @@ jobs:
 
       - name: Create or Update Container App
         env:
-          RG:               ${{ inputs.resource_group }}
-          ACA_ENV:          ${{ inputs.aca_environment }}
-          LOCATION:         ${{ inputs.location }}
-          APP_NAME:         ${{ inputs.app_name }}
-          IMAGE:            ${{ inputs.image_ref }}
-          INGRESS:          ${{ inputs.ingress }}
-          TARGET_PORT:      ${{ inputs.target_port }}
-          CPU:              ${{ inputs.cpu }}
-          MEMORY:           ${{ inputs.memory }}
-          MIN_REPLICAS:     ${{ inputs.min_replicas }}
-          MAX_REPLICAS:     ${{ inputs.max_replicas }}
-          EXTRA_ENV:        ${{ inputs.extra_env }}
+          RG: ${{ inputs.resource_group }}
+          ACA_ENV: ${{ inputs.aca_environment }}
+          LOCATION: ${{ inputs.location }}
+          APP_NAME: ${{ inputs.app_name }}
+          IMAGE: ${{ inputs.image_ref }}
+          INGRESS: ${{ inputs.ingress }}
+          TARGET_PORT: ${{ inputs.target_port }}
+          CPU: ${{ inputs.cpu }}
+          MEMORY: ${{ inputs.memory }}
+          MIN_REPLICAS: ${{ inputs.min_replicas }}
+          MAX_REPLICAS: ${{ inputs.max_replicas }}
+          EXTRA_ENV: ${{ inputs.extra_env }}
         run: |
           set -euo pipefail
 
-          # Construye argumentos -e KEY=VAL desde bloque multi-línea
-          ENV_ARGS=""
+          # Construye argumentos -e KEY=VAL usando array (evita globbing y respeta espacios)
+          ENV_ARGS=()
           if [ -n "${EXTRA_ENV:-}" ]; then
             while IFS= read -r line; do
               [ -z "$line" ] && continue
-              ENV_ARGS="${ENV_ARGS} -e ${line}"
+              ENV_ARGS+=(-e "$line")
             done <<< "${EXTRA_ENV}"
           fi
 
@@ -165,7 +166,7 @@ jobs:
               --max-replicas "${MAX_REPLICAS}" \
               --cpu "${CPU}" \
               --memory "${MEMORY}" \
-              "${ENV_ARGS}"
+              "${ENV_ARGS[@]}"
           else
             az containerapp create \
               -g "${RG}" \
@@ -178,7 +179,7 @@ jobs:
               --max-replicas "${MAX_REPLICAS}" \
               --cpu "${CPU}" \
               --memory "${MEMORY}" \
-              "${ENV_ARGS}"
+              "${ENV_ARGS[@]}"
           fi
 
       - name: Get FQDN
