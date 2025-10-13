@@ -1,3 +1,4 @@
+---
 name: Docker Image Publish
 
 on:
@@ -33,7 +34,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write   # necesario para azure/login si usas OIDC
+  id-token: write
 
 jobs:
   publish:
@@ -50,12 +51,11 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # ⚠️ Fix: mover el "recorte" del login server a bash (evita el error de actionlint)
       - name: ACR login (az acr login)
         env:
           ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
         run: |
-          REG_NAME="${ACR_LOGIN_SERVER%%.*}"   # 'itxzacrlab01' a partir de 'itxzacrlab01.azurecr.io'
+          REG_NAME="${ACR_LOGIN_SERVER%%.*}"
           az acr login --name "$REG_NAME"
 
       - name: Set up Docker Buildx
@@ -86,7 +86,6 @@ jobs:
           build-args: |
             ${{ inputs.build_args }}
 
-      # ⚠️ Fix: agrupar redirecciones y entrecomillar para que no se queje shellcheck
       - name: Summary
         run: |
           {
