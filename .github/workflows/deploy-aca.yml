@@ -4,18 +4,15 @@ name: Reusable - Deploy to Azure Container Apps
 on:
   workflow_call:
     inputs:
-      # Contexto
       environment:
-        description: Entorno lógico (dev/qa/prd) solo informativo
         required: false
         type: string
         default: dev
       commit_sha:
-        description: SHA a desplegar (se usa para etiquetar la imagen)
         required: true
         type: string
 
-      # Azure / OIDC (REQUIRED)
+      # Azure / OIDC (requeridos)
       azure_client_id:
         required: true
         type: string
@@ -26,7 +23,7 @@ on:
         required: true
         type: string
 
-      # Destino ACA
+      # Destino ACA (requeridos)
       resource_group:
         required: true
         type: string
@@ -40,17 +37,15 @@ on:
         required: true
         type: string
 
-      # ACR
+      # ACR (requeridos)
       acr_login_server:
-        description: itxzacrlab01.azurecr.io
         required: true
         type: string
       image_repository:
-        description: nombre de repo dentro del ACR (sin el login server)
         required: true
         type: string
 
-      # Identidad administrada de la ACA para pulls desde ACR (opcional pero recomendado)
+      # Identidad MI de la ACA para pulls (opcional)
       acr_identity_client_id:
         required: false
         type: string
@@ -104,19 +99,14 @@ jobs:
           echo "aca_env=${{ inputs.aca_environment }}"
           echo "location=${{ inputs.location }}"
           echo "app=${{ inputs.app_name }}"
-          echo "acr_login_server=${{ inputs.acr_login_server }}"
-          echo "image_repository=${{ inputs.image_repository }}"
-          echo "acr_identity_client_id=${{ inputs.acr_identity_client_id }}"
+          echo "acr=${{ inputs.acr_login_server }}"
+          echo "repo=${{ inputs.image_repository }}"
+          echo "acr_mi=${{ inputs.acr_identity_client_id }}"
 
       - name: Validar inputs requeridos
         shell: bash
         run: |
           set -euo pipefail
-          req=(azure_client_id azure_tenant_id azure_subscription_id resource_group aca_environment location app_name acr_login_server image_repository commit_sha)
-          for k in "${req[@]}"; do
-            v="${{ inputs[format('{0}', 'dummy')] }}" # dummy para inicializar
-          done
-          # Validación manual para mensajes claros
           [ -n "${{ inputs.azure_client_id }}" ] || { echo "Falta azure_client_id"; exit 1; }
           [ -n "${{ inputs.azure_tenant_id }}" ] || { echo "Falta azure_tenant_id"; exit 1; }
           [ -n "${{ inputs.azure_subscription_id }}" ] || { echo "Falta azure_subscription_id"; exit 1; }
@@ -163,27 +153,25 @@ jobs:
             az acr show -n "$ACR_NAME" -o none
           fi
 
-      - name: Configurar registro de imágenes de la ACA (si aplica)
+      - name: Configurar ACR en la ACA (pull con MI) — opcional
         if: ${{ inputs.acr_identity_client_id != '' }}
         env:
           RESOURCE_GROUP: ${{ inputs.resource_group }}
           APP_NAME: ${{ inputs.app_name }}
           ACR_LOGIN: ${{ inputs.acr_login_server }}
-          ACR_IDENTITY_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
+          ACR_MI_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
         shell: bash
         run: |
           set -euo pipefail
-          # Registrar el ACR en la app para pulls con identidad administrada
           az containerapp registry set \
             -g "$RESOURCE_GROUP" -n "$APP_NAME" \
             --server "$ACR_LOGIN" \
-            --identity "$ACR_IDENTITY_CLIENT_ID"
+            --identity "$ACR_MI_CLIENT_ID"
 
       - name: Desplegar imagen (az containerapp update)
         env:
           RESOURCE_GROUP: ${{ inputs.resource_group }}
           APP_NAME: ${{ inputs.app_name }}
-          IMAGE_REF: ${{ inputs.acr_login_server }}/${{ inputs.image_repository }}:sha-${{ inputs.commit_sha }}
           INGRESS: ${{ inputs.ingress }}
           TARGET_PORT: ${{ inputs.target_port }}
           CPU: ${{ inputs.cpu }}
@@ -194,7 +182,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          IMAGE_REF="${{ inputs.acr_login_server }}/${{ inputs.image_repository }}:sha-${{ inputs.commit_sha }}"
           echo "Deploying image: $IMAGE_REF"
+
           PARAMS=( -g "$RESOURCE_GROUP" -n "$APP_NAME" --image "$IMAGE_REF" )
           [ -n "${INGRESS:-}" ]      && PARAMS+=( --ingress "$INGRESS" )
           [ -n "${TARGET_PORT:-}" ]  && PARAMS+=( --target-port "$TARGET_PORT" )
