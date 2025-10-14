@@ -1,164 +1,129 @@
----
-name: Reusable - Deploy to Azure Container Apps
+name: Deploy to ACA
 
 on:
   workflow_call:
     inputs:
       environment:
-        description: "GitHub Environment (dev|qa|prd)"
-        type: string
         required: true
+        type: string
       commit_sha:
-        description: "SHA del commit para tag de imagen"
+        required: true
         type: string
-        required: false
 
-      # Opcionales; si faltan, se leen de vars.* del Environment
+      # Azure/OIDC
       azure_client_id:
+        required: true
         type: string
-        required: false
       azure_tenant_id:
+        required: true
         type: string
-        required: false
       azure_subscription_id:
+        required: true
         type: string
-        required: false
-      resource_group:
-        type: string
-        required: false
-      aca_environment:
-        type: string
-        required: false
-      location:
-        type: string
-        required: false
-      app_name:
-        type: string
-        required: false
-      image_ref:
-        type: string
-        required: false
-      ingress:
-        type: string
-        required: false
-      target_port:
-        type: string
-        required: false
-      cpu:
-        type: string
-        required: false
-      memory:
-        type: string
-        required: false
-      min_replicas:
-        type: string
-        required: false
-      max_replicas:
-        type: string
-        required: false
-      extra_env:
-        type: string
-        required: false
-      acr_login_server:
-        type: string
-        required: false
-      acr_identity_client_id:
-        description: "ClientId de la Managed Identity de la ACA (NO el App Registration de OIDC)"
-        type: string
-        required: false
 
-defaults:
-  run:
-    shell: bash
+      # Infra destino
+      resource_group:
+        required: true
+        type: string
+      aca_environment:
+        required: true
+        type: string
+      location:
+        required: true
+        type: string
+      app_name:
+        required: true
+        type: string
+
+      # ACR + identidad para pulls
+      acr_login_server:
+        required: true
+        type: string
+      acr_identity_client_id:
+        required: true
+        type: string
+
+      # Opcionales de runtime
+      ingress:
+        required: false
+        type: string
+        default: ""
+      target_port:
+        required: false
+        type: string
+        default: ""
+      cpu:
+        required: false
+        type: string
+        default: ""
+      memory:
+        required: false
+        type: string
+        default: ""
+      min_replicas:
+        required: false
+        type: string
+        default: ""
+      max_replicas:
+        required: false
+        type: string
+        default: ""
+      extra_env:
+        required: false
+        type: string
+        default: ""
+
+      # Nombre del repositorio de imagen en ACR (sin registry). Ej: archetype-back
+      image_repository:
+        required: true
+        type: string
 
 jobs:
   deploy:
     name: Deploy ${{ inputs.environment }}
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    environment: ${{ inputs.environment }}
-
-    concurrency:
-      group: aca-${{ inputs.environment }}-${{ inputs.commit_sha || github.sha }}
-      cancel-in-progress: true
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout (caller)
+      - name: Checkout (caller repo)
         uses: actions/checkout@v4
 
-      # Lints no bloqueantes
-      - name: Write .yamllint config
-        run: |
-          cat > .yamllint.yml <<'CFG'
-          extends: default
-          rules:
-            document-start: { present: true }
-            trailing-spaces: { level: error }
-            new-line-at-end-of-file: { level: error }
-            colons: disable
-            braces: disable
-            line-length: disable
-            truthy: disable
-            brackets: disable
-            comments: disable
-            indentation: disable
-            empty-lines: disable
-          CFG
-
-      - name: yamllint (non-blocking)
-        uses: ibiqlik/action-yamllint@v3
-        with:
-          file_or_dir: .github/workflows
-          format: github
-          strict: true
-          no_warnings: false
-        continue-on-error: true
-
-      - name: actionlint (non-blocking)
-        uses: rhysd/actionlint@v1.6.27
-        continue-on-error: true
-
-      - name: Azure Login (OIDC)
+      - name: Login to Azure with OIDC
         uses: azure/login@v2
         with:
-          client-id: ${{ inputs.azure_client_id       || vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ inputs.azure_tenant_id       || vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ inputs.azure_subscription_id || vars.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ inputs.azure_client_id }}
+          tenant-id: ${{ inputs.azure_tenant_id }}
+          subscription-id: ${{ inputs.azure_subscription_id }}
 
-      - name: Identidad OIDC (debug)
+      - name: Prepare variables
+        id: prep
+        shell: bash
         run: |
           set -euo pipefail
-          echo "↪ Cuenta de Azure activa:"
-          az account show --query "{subscription:id, tenant:tenantId, user:user}" -o tsv || true
-          echo "↪ SP objectId del App Registration (para RBAC):"
-          az ad sp show --id "${{ inputs.azure_client_id || vars.AZURE_CLIENT_ID }}" --query id -o tsv || true
 
-      - name: Resolver parámetros (fallback a vars.*)
-        id: r
-        run: |
-          set -euo pipefail
-          rg="${{ inputs.resource_group  || vars.AZ_RESOURCE_GROUP }}"
-          aca_env="${{ inputs.aca_environment || vars.ACA_ENV_NAME }}"
-          loc="${{ inputs.location       || vars.AZ_LOCATION }}"
-          app="${{ inputs.app_name       || vars.APP_NAME }}"
-          acr="${{ inputs.acr_login_server || vars.ACR_LOGIN_SERVER }}"
-          sha="${{ inputs.commit_sha || github.sha }}"
-          img="${{ inputs.image_ref || '' }}"
-          if [ -z "$img" ]; then
-            img="${acr}/${{ vars.IMAGE_NAME }}:sha-${sha}"
-          fi
+          rg="${{ inputs.resource_group }}"
+          aca_env="${{ inputs.aca_environment }}"
+          loc="${{ inputs.location }}"
+          app="${{ inputs.app_name }}"
+          acr="${{ inputs.acr_login_server }}"
+          sha="${{ inputs.commit_sha }}"
+          repo="${{ inputs.image_repository }}"
+
+          # Para ACR: nombre sin .azurecr.io
+          acr_name="${acr%%.*}"
+
           {
             printf 'rg=%s\n' "$rg"
             printf 'aca_env=%s\n' "$aca_env"
             printf 'loc=%s\n' "$loc"
             printf 'app=%s\n' "$app"
             printf 'acr=%s\n' "$acr"
-            printf 'image=%s\n' "$img"
+            printf 'acr_name=%s\n' "$acr_name"
+            printf 'sha=%s\n' "$sha"
+            printf 'repo=%s\n' "$repo"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Ensure Azure CLI + containerapp extension
+      - name: Ensure containerapp CLI extension
+        shell: bash
         run: |
           set -euo pipefail
           az version
@@ -168,58 +133,73 @@ jobs:
             az extension update --name containerapp -y || true
           fi
 
-      - name: Validar recursos existentes (no muta, con retry)
+      - name: Validate target resources exist
+        shell: bash
         env:
-          RG: ${{ steps.r.outputs.rg }}
-          ACA_ENV: ${{ steps.r.outputs.aca_env }}
-          APP: ${{ steps.r.outputs.app }}
-          ACR_LOGIN: ${{ steps.r.outputs.acr }}
+          RG: ${{ steps.prep.outputs.rg }}
+          ACA_ENV: ${{ steps.prep.outputs.aca_env }}
+          APP: ${{ steps.prep.outputs.app }}
+          ACR_LOGIN: ${{ steps.prep.outputs.acr }}
         run: |
           set -euo pipefail
-          retry() {
-            local tries="${1:-12}"; shift || true
-            local delay="${1:-10}"; shift || true
-            local cmd="$*"
-            local n=1
-            until bash -lc "$cmd"; do
-              rc=$?
-              echo "↪ Intento $n/$tries falló (rc=$rc). Reintentando en ${delay}s…"
-              (( n++ > tries )) && return "$rc"
-              sleep "$delay"
-            done
-          }
-
-          retry 12 10 az group show -n "$RG" -o none
-          retry 12 10 az containerapp env show -g "$RG" -n "$ACA_ENV" -o none
-          retry 12 10 az containerapp show -g "$RG" -n "$APP" -o none
-
+          az group show -n "$RG" -o none
+          az containerapp env show -g "$RG" -n "$ACA_ENV" -o none
+          az containerapp show -g "$RG" -n "$APP" -o none
+          # Si se definió ACR, comprobar que exista
           if [[ -n "${ACR_LOGIN:-}" ]]; then
-            ACR_NAME="$ACR_LOGIN"; ACR_NAME="${ACR_NAME%%.*}"
-            retry 12 10 az acr show -n "$ACR_NAME" -o none
+            ACR_NAME="${ACR_LOGIN%%.*}"
+            az acr show -n "$ACR_NAME" -o none
           fi
 
-      - name: Aplicar permisos de registry (idempotente, solo si se provee MI)
-        if: ${{ inputs.acr_identity_client_id != '' }}
+      - name: Map registry to Container App using MI (sin --yes)
+        if: ${{ inputs.acr_login_server != '' && inputs.acr_identity_client_id != '' }}
+        shell: bash
         env:
-          RESOURCE_GROUP: ${{ steps.r.outputs.rg }}
-          APP_NAME: ${{ steps.r.outputs.app }}
-          ACR_LOGIN: ${{ steps.r.outputs.acr }}
-          ACR_ID: ${{ inputs.acr_identity_client_id }}
+          RESOURCE_GROUP: ${{ steps.prep.outputs.rg }}
+          APP_NAME: ${{ steps.prep.outputs.app }}
+          ACR_LOGIN: ${{ steps.prep.outputs.acr }}
+          ACR_MI_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
         run: |
           set -euo pipefail
-          if [ -n "${ACR_LOGIN:-}" ]; then
-            az containerapp registry set \
-              -g "$RESOURCE_GROUP" -n "$APP_NAME" \
-              --server "$ACR_LOGIN" \
-              --identity "$ACR_ID" \
-              --yes || true
+          # IMPORTANTE: no usar --yes (no existe en este comando)
+          az containerapp registry set \
+            -g "$RESOURCE_GROUP" -n "$APP_NAME" \
+            --server "$ACR_LOGIN" \
+            --identity "$ACR_MI_CLIENT_ID"
+
+      - name: Resolve image digest from ACR (deploy por digest)
+        id: digest
+        shell: bash
+        env:
+          ACR_NAME: ${{ steps.prep.outputs.acr_name }}
+          REPO: ${{ steps.prep.outputs.repo }}
+          SHA: ${{ steps.prep.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # El build empuja el tag "sha-${SHA}". Aquí resolvemos su digest inmutable.
+          echo "Resolviendo digest para ${REPO}:sha-${SHA} en ${ACR_NAME}…"
+          if ! DIGEST="$(az acr repository show \
+                -n "$ACR_NAME" \
+                --image "${REPO}:sha-${SHA}" \
+                --query digest -o tsv)"; then
+            echo "::error::No se encontró el tag 'sha-${SHA}' en ACR '${ACR_NAME}' repo '${REPO}'. Verifica que el job de build empujó esa imagen."
+            exit 1
           fi
 
-      - name: Update Container App (imagen + config)
+          if [[ -z "${DIGEST:-}" ]]; then
+            echo "::error::El digest vino vacío. Revisa el push de la imagen."
+            exit 1
+          fi
+
+          IMAGE_REF="${{ steps.prep.outputs.acr }}/${REPO}@${DIGEST}"
+          echo "image_ref=${IMAGE_REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to ACA (using image@digest)
+        shell: bash
         env:
-          RESOURCE_GROUP: ${{ steps.r.outputs.rg }}
-          APP_NAME: ${{ steps.r.outputs.app }}
-          IMAGE_REF: ${{ steps.r.outputs.image }}
+          RESOURCE_GROUP: ${{ steps.prep.outputs.rg }}
+          APP_NAME: ${{ steps.prep.outputs.app }}
+          IMAGE_REF: ${{ steps.digest.outputs.image_ref }}
           INGRESS: ${{ inputs.ingress }}
           TARGET_PORT: ${{ inputs.target_port }}
           CPU: ${{ inputs.cpu }}
@@ -229,18 +209,22 @@ jobs:
           EXTRA_ENV: ${{ inputs.extra_env }}
         run: |
           set -euo pipefail
+
           PARAMS=( -g "$RESOURCE_GROUP" -n "$APP_NAME" --image "$IMAGE_REF" )
-          [ -n "${INGRESS:-}" ]      && PARAMS+=( --ingress "$INGRESS" )
-          [ -n "${TARGET_PORT:-}" ]  && PARAMS+=( --target-port "$TARGET_PORT" )
-          [ -n "${CPU:-}" ]          && PARAMS+=( --cpu "$CPU" )
-          [ -n "${MEMORY:-}" ]       && PARAMS+=( --memory "$MEMORY" )
-          [ -n "${MIN_REPLICAS:-}" ] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
-          [ -n "${MAX_REPLICAS:-}" ] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
-          if [ -n "${EXTRA_ENV:-}" ]; then
+          [[ -n "${INGRESS:-}"      ]] && PARAMS+=( --ingress "$INGRESS" )
+          [[ -n "${TARGET_PORT:-}"  ]] && PARAMS+=( --target-port "$TARGET_PORT" )
+          [[ -n "${CPU:-}"          ]] && PARAMS+=( --cpu "$CPU" )
+          [[ -n "${MEMORY:-}"       ]] && PARAMS+=( --memory "$MEMORY" )
+          [[ -n "${MIN_REPLICAS:-}" ]] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
+          [[ -n "${MAX_REPLICAS:-}" ]] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
+
+          # Soporte para múltiples líneas KEY=VALUE en EXTRA_ENV
+          if [[ -n "${EXTRA_ENV:-}" ]]; then
             while IFS= read -r line; do
-              [ -z "$line" ] && continue
+              [[ -z "$line" ]] && continue
               PARAMS+=( --set-env-vars "$line" )
             done <<< "$EXTRA_ENV"
           fi
+
           az containerapp update "${PARAMS[@]}"
-          echo "✅ Deploy completado."
+          echo "✅ Deploy completado con ${IMAGE_REF}"
