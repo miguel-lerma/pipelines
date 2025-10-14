@@ -275,3 +275,4 @@ jobs:
           az containerapp update "${PARAMS[@]}"
 
           echo "✅ Deploy OK (imagen inmutable: $IMAGE_PIN)"
+
