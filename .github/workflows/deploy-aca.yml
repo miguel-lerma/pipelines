@@ -84,14 +84,12 @@ defaults:
 jobs:
   deploy:
     name: Deploy ${{ inputs.environment }}
-    # LIGA el job al Environment del repo que llama (dev/qa/prod)
     environment: ${{ inputs.environment }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
 
-    # Evita despliegues concurrentes al mismo app+env
     concurrency:
       group: aca-${{ inputs.app_name }}-${{ inputs.environment }}
       cancel-in-progress: true
@@ -100,7 +98,6 @@ jobs:
       - name: Checkout repo (caller)
         uses: actions/checkout@v4
 
-      # --- (Opcional) Lint rápido para YAML del caller ---
       - name: Write .yamllint config
         run: |
           cat > .yamllint.yml <<'CFG'
@@ -109,7 +106,6 @@ jobs:
             document-start: { present: true }
             trailing-spaces: { level: error }
             new-line-at-end-of-file: { level: error }
-            # Reglas ruidosas para GH expressions:
             colons: disable
             braces: disable
             line-length: disable
@@ -132,7 +128,6 @@ jobs:
         with:
           shellcheck: false
 
-      # --- Login Azure con OIDC ---
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -140,7 +135,6 @@ jobs:
           tenant-id: ${{ inputs.azure_tenant_id }}
           subscription-id: ${{ inputs.azure_subscription_id }}
 
-      # Asegurar extensión de ACA (idempotente)
       - name: Ensure Azure CLI containerapp extension
         run: |
           set -euo pipefail
@@ -150,7 +144,6 @@ jobs:
             az extension update --name containerapp -y || true
           fi
 
-      # --- VALIDACIÓN: no crear nada, solo comprobar que existe ---
       - name: Validate existing infra (no mutations)
         env:
           RESOURCE_GROUP:  ${{ inputs.resource_group }}
@@ -164,19 +157,11 @@ jobs:
           : "${ACA_ENVIRONMENT:?missing input 'aca_environment'}"
           : "${LOCATION:?missing input 'location'}"
           : "${APP_NAME:?missing input 'app_name'}"
-
-          echo "🔎 Validando Resource Group..."
           az group show -n "$RESOURCE_GROUP" -o none
-
-          echo "🔎 Validando ACA Environment..."
           az containerapp env show -g "$RESOURCE_GROUP" -n "$ACA_ENVIRONMENT" -o none
-
-          echo "🔎 Validando Container App..."
           az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" -o none
-
           if [[ -n "${ACR_LOGIN_SERVER:-}" ]]; then
             ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
-            echo "🔎 Validando ACR '$ACR_NAME'..."
             az acr show -n "$ACR_NAME" -o none
           fi
 
@@ -191,11 +176,9 @@ jobs:
               PARAMS+=( --set-env-vars "$line" )
             done <<< "${{ inputs.extra_env }}"
           fi
-          # Serializa el array para recuperarlo luego
           printf '%s\0' "${PARAMS[@]}" > envparams.bin
           echo "file=envparams.bin" >> "$GITHUB_OUTPUT"
 
-      # --- Solo actualización de app existente ---
       - name: Update existing Container App
         env:
           RESOURCE_GROUP:  ${{ inputs.resource_group }}
@@ -211,10 +194,8 @@ jobs:
           ACR_IDENTITY_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
         run: |
           set -euo pipefail
-          # Recupera los --set-env-vars serializados
           readarray -d '' ENV_PARAMS < "${{ steps.envblk.outputs.file }}"
 
-          # (Opcional) Configurar registry de la app si fue provisto
           if [[ -n "${ACR_LOGIN_SERVER:-}" ]]; then
             if [[ -n "${ACR_IDENTITY_CLIENT_ID:-}" ]]; then
               az containerapp registry set \
@@ -230,22 +211,15 @@ jobs:
             fi
           fi
 
-          # Construir parámetros dinámicos (solo si vienen con valor)
           PARAMS=( -g "$RESOURCE_GROUP" -n "$APP_NAME" --image "$IMAGE_REF" )
-
           [[ -n "${INGRESS:-}"      ]] && PARAMS+=( --ingress "$INGRESS" )
           [[ -n "${TARGET_PORT:-}"  ]] && PARAMS+=( --target-port "$TARGET_PORT" )
           [[ -n "${CPU:-}"          ]] && PARAMS+=( --cpu "$CPU" )
           [[ -n "${MEMORY:-}"       ]] && PARAMS+=( --memory "$MEMORY" )
           [[ -n "${MIN_REPLICAS:-}" ]] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
           [[ -n "${MAX_REPLICAS:-}" ]] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
-
-          # Añadir variables de entorno (si existían)
           if [[ ${#ENV_PARAMS[@]} -gt 0 ]]; then
             PARAMS+=( "${ENV_PARAMS[@]}" )
           fi
-
-          echo "🚀 Actualizando imagen y configuración..."
           az containerapp update "${PARAMS[@]}"
-
           echo "✅ Despliegue (update) completado."
