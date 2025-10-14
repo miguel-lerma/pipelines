@@ -5,9 +5,9 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: "GitHub Environment a aplicar (dev, staging, prod, etc.)"
+        description: "GitHub Environment a aplicar (dev, stg, prd, etc.)"
         type: string
-        required: false
+        required: true
 
       # ---- OIDC / Azure ----
       azure_client_id:
@@ -83,17 +83,24 @@ defaults:
 
 jobs:
   deploy:
-    environment: ${{ inputs.environment || '' }}
+    name: Deploy ${{ inputs.environment }}
+    # LIGA el job al Environment del repo que llama (dev/stg/prd)
+    environment: ${{ inputs.environment }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
 
+    # Evita despliegues concurrentes al mismo app+env
+    concurrency:
+      group: aca-${{ inputs.app_name }}-${{ inputs.environment }}
+      cancel-in-progress: true
+
     steps:
-      - name: Checkout repo (pipelines)
+      - name: Checkout repo (caller)
         uses: actions/checkout@v4
 
-      # --- Lint opcional ---
+      # --- Lint opcional (del repo caller) ---
       - name: Write .yamllint config
         run: |
           cat > .yamllint.yml <<'CFG'
@@ -135,6 +142,16 @@ jobs:
           client-id: ${{ inputs.azure_client_id }}
           tenant-id: ${{ inputs.azure_tenant_id }}
           subscription-id: ${{ inputs.azure_subscription_id }}
+
+      # Asegurar extensión de ACA (idempotente)
+      - name: Ensure Azure CLI containerapp extension
+        run: |
+          set -euo pipefail
+          if ! az extension show --name containerapp >/dev/null 2>&1; then
+            az extension add --name containerapp -y
+          else
+            az extension update --name containerapp -y || true
+          fi
 
       # --- VALIDACIÓN: no crear nada, solo comprobar que existe ---
       - name: Validate existing infra (no mutations)
