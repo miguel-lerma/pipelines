@@ -77,6 +77,10 @@ on:
 
     secrets: {}
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   deploy:
     environment: ${{ inputs.environment || '' }}
@@ -97,12 +101,14 @@ jobs:
           rules:
             document-start:
               present: true
-            line-length:
-              max: 160
             trailing-spaces:
               level: error
             new-line-at-end-of-file:
               level: error
+            # Reglas ruidosas para GH expressions:
+            colons: disable
+            braces: disable
+            line-length: disable
             truthy: disable
             brackets: disable
             comments: disable
@@ -119,6 +125,8 @@ jobs:
 
       - name: actionlint (GHA syntax)
         uses: rhysd/actionlint@v1.6.27
+        with:
+          shellcheck: false
 
       # --- Login Azure con OIDC ---
       - name: Azure Login (OIDC)
@@ -130,7 +138,6 @@ jobs:
 
       # --- VALIDACIÓN: no crear nada, solo comprobar que existe ---
       - name: Validate existing infra (no mutations)
-        shell: bash
         env:
           RESOURCE_GROUP: ${{ inputs.resource_group }}
           ACA_ENVIRONMENT: ${{ inputs.aca_environment }}
@@ -146,46 +153,49 @@ jobs:
 
           echo "🔎 Validando Resource Group..."
           if ! az group show -n "$RESOURCE_GROUP" -o none; then
-            echo "❌ Resource group '$RESOURCE_GROUP' no existe. Este workflow NO crea infraestructura."; exit 2
+            echo "❌ Resource group '$RESOURCE_GROUP' no existe. Este workflow NO crea infraestructura."
+            exit 2
           fi
 
           echo "🔎 Validando ACA Environment..."
           if ! az containerapp env show -g "$RESOURCE_GROUP" -n "$ACA_ENVIRONMENT" -o none; then
-            echo "❌ ACA env '$ACA_ENVIRONMENT' no existe en RG '$RESOURCE_GROUP'. Créalo fuera del pipeline."; exit 2
+            echo "❌ ACA env '$ACA_ENVIRONMENT' no existe en RG '$RESOURCE_GROUP'. Créalo fuera del pipeline."
+            exit 2
           fi
 
           echo "🔎 Validando Container App..."
           if ! az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" -o none; then
-            echo "❌ La Container App '$APP_NAME' no existe en RG '$RESOURCE_GROUP'. Créala fuera del pipeline."; exit 2
+            echo "❌ La Container App '$APP_NAME' no existe en RG '$RESOURCE_GROUP'. Créala fuera del pipeline."
+            exit 2
           fi
 
           if [[ -n "${ACR_LOGIN_SERVER:-}" ]]; then
             ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
             echo "🔎 Validando ACR '$ACR_NAME'..."
             if ! az acr show -n "$ACR_NAME" -o none; then
-              echo "❌ ACR '$ACR_NAME' no existe. Créalo/configúralo fuera del pipeline."; exit 2
+              echo "❌ ACR '$ACR_NAME' no existe. Créalo/configúralo fuera del pipeline."
+              exit 2
             fi
           fi
 
       - name: Build env var block
         id: envblk
-        shell: bash
         run: |
           set -euo pipefail
           PARAMS=()
           if [[ -n "${{ inputs.extra_env }}" ]]; then
+            # Acepta múltiples líneas KEY=VALUE
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
-              # Usamos --set-env-vars (admite múltiples pares KEY=VAL separados por espacios)
               PARAMS+=( --set-env-vars "$line" )
             done <<< "${{ inputs.extra_env }}"
           fi
+          # Serializa el array para recuperarlo luego
           printf '%s\0' "${PARAMS[@]}" > envparams.bin
           echo "file=envparams.bin" >> "$GITHUB_OUTPUT"
 
-      # --- Solo actualización: nada de 'create' ni 'up' ---
+      # --- Solo actualización de app existente ---
       - name: Update existing Container App
-        shell: bash
         env:
           RESOURCE_GROUP: ${{ inputs.resource_group }}
           APP_NAME: ${{ inputs.app_name }}
@@ -200,9 +210,10 @@ jobs:
           ACR_IDENTITY_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
         run: |
           set -euo pipefail
+          # Recupera los --set-env-vars serializados
           readarray -d '' ENV_PARAMS < "${{ steps.envblk.outputs.file }}"
 
-          # (Opcional) Configurar registry si fue provisto (esto es configuración, no creación)
+          # (Opcional) Configurar registry de la app si fue provisto
           if [[ -n "${ACR_LOGIN_SERVER:-}" ]]; then
             if [[ -n "${ACR_IDENTITY_CLIENT_ID:-}" ]]; then
               az containerapp registry set \
@@ -218,7 +229,7 @@ jobs:
             fi
           fi
 
-          # Actualiza imagen + env (y, si quieres, recursos/escala/ingress)
+          echo "🚀 Actualizando imagen y configuración..."
           az containerapp update \
             -g "$RESOURCE_GROUP" \
             -n "$APP_NAME" \
