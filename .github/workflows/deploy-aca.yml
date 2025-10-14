@@ -168,7 +168,7 @@ jobs:
             az extension update --name containerapp -y || true
           fi
 
-      - name: Validar recursos existentes (no muta)
+      - name: Validar recursos existentes (no muta, con retry)
         env:
           RG: ${{ steps.r.outputs.rg }}
           ACA_ENV: ${{ steps.r.outputs.aca_env }}
@@ -176,13 +176,26 @@ jobs:
           ACR_LOGIN: ${{ steps.r.outputs.acr }}
         run: |
           set -euo pipefail
-          az group show -n "$RG" -o none
-          az containerapp env show -g "$RG" -n "$ACA_ENV" -o none
-          az containerapp show -g "$RG" -n "$APP" -o none
+          retry() {
+            local tries="${1:-12}"; shift || true
+            local delay="${1:-10}"; shift || true
+            local cmd="$*"
+            local n=1
+            until bash -lc "$cmd"; do
+              rc=$?
+              echo "↪ Intento $n/$tries falló (rc=$rc). Reintentando en ${delay}s…"
+              (( n++ > tries )) && return "$rc"
+              sleep "$delay"
+            done
+          }
+
+          retry 12 10 az group show -n "$RG" -o none
+          retry 12 10 az containerapp env show -g "$RG" -n "$ACA_ENV" -o none
+          retry 12 10 az containerapp show -g "$RG" -n "$APP" -o none
+
           if [[ -n "${ACR_LOGIN:-}" ]]; then
-            ACR_NAME="$ACR_LOGIN"
-            ACR_NAME="${ACR_NAME%%.*}"
-            az acr show -n "$ACR_NAME" -o none
+            ACR_NAME="$ACR_LOGIN"; ACR_NAME="${ACR_NAME%%.*}"
+            retry 12 10 az acr show -n "$ACR_NAME" -o none
           fi
 
       - name: Aplicar permisos de registry (idempotente, solo si se provee MI)
