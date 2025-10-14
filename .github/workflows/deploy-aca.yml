@@ -146,10 +146,10 @@ jobs:
 
       - name: Validate existing infra (no mutations)
         env:
-          RESOURCE_GROUP:  ${{ inputs.resource_group }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
           ACA_ENVIRONMENT: ${{ inputs.aca_environment }}
-          LOCATION:        ${{ inputs.location }}
-          APP_NAME:        ${{ inputs.app_name }}
+          LOCATION: ${{ inputs.location }}
+          APP_NAME: ${{ inputs.app_name }}
           ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
         run: |
           set -euo pipefail
@@ -181,16 +181,16 @@ jobs:
 
       - name: Update existing Container App
         env:
-          RESOURCE_GROUP:  ${{ inputs.resource_group }}
-          APP_NAME:        ${{ inputs.app_name }}
-          IMAGE_REF:       ${{ inputs.image_ref }}
-          INGRESS:         ${{ inputs.ingress }}
-          TARGET_PORT:     ${{ inputs.target_port }}
-          CPU:             ${{ inputs.cpu }}
-          MEMORY:          ${{ inputs.memory }}
-          MIN_REPLICAS:    ${{ inputs.min_replicas }}
-          MAX_REPLICAS:    ${{ inputs.max_replicas }}
-          ACR_LOGIN_SERVER:       ${{ inputs.acr_login_server }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          APP_NAME: ${{ inputs.app_name }}
+          IMAGE_REF: ${{ inputs.image_ref }}
+          INGRESS: ${{ inputs.ingress }}
+          TARGET_PORT: ${{ inputs.target_port }}
+          CPU: ${{ inputs.cpu }}
+          MEMORY: ${{ inputs.memory }}
+          MIN_REPLICAS: ${{ inputs.min_replicas }}
+          MAX_REPLICAS: ${{ inputs.max_replicas }}
+          ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
           ACR_IDENTITY_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
         run: |
           set -euo pipefail
@@ -212,14 +212,15 @@ jobs:
           fi
 
           PARAMS=( -g "$RESOURCE_GROUP" -n "$APP_NAME" --image "$IMAGE_REF" )
-          [[ -n "${INGRESS:-}"      ]] && PARAMS+=( --ingress "$INGRESS" )
-          [[ -n "${TARGET_PORT:-}"  ]] && PARAMS+=( --target-port "$TARGET_PORT" )
-          [[ -n "${CPU:-}"          ]] && PARAMS+=( --cpu "$CPU" )
-          [[ -n "${MEMORY:-}"       ]] && PARAMS+=( --memory "$MEMORY" )
+          [[ -n "${INGRESS:-}" ]] && PARAMS+=( --ingress "$INGRESS" )
+          [[ -n "${TARGET_PORT:-}" ]] && PARAMS+=( --target-port "$TARGET_PORT" )
+          [[ -n "${CPU:-}" ]] && PARAMS+=( --cpu "$CPU" )
+          [[ -n "${MEMORY:-}" ]] && PARAMS+=( --memory "$MEMORY" )
           [[ -n "${MIN_REPLICAS:-}" ]] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
           [[ -n "${MAX_REPLICAS:-}" ]] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
           if [[ ${#ENV_PARAMS[@]} -gt 0 ]]; then
             PARAMS+=( "${ENV_PARAMS[@]}" )
           fi
+
           az containerapp update "${PARAMS[@]}"
           echo "✅ Despliegue (update) completado."
