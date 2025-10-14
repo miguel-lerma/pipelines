@@ -1,3 +1,4 @@
+---
 name: Deploy to ACA
 
 on:
@@ -81,7 +82,7 @@ on:
 jobs:
   deploy:
     name: Deploy ${{ inputs.environment }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout (caller repo)
@@ -161,7 +162,6 @@ jobs:
           ACR_MI_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
         run: |
           set -euo pipefail
-          # IMPORTANTE: no usar --yes (no existe en este comando)
           az containerapp registry set \
             -g "$RESOURCE_GROUP" -n "$APP_NAME" \
             --server "$ACR_LOGIN" \
@@ -176,7 +176,6 @@ jobs:
           SHA: ${{ steps.prep.outputs.sha }}
         run: |
           set -euo pipefail
-          # El build empuja el tag "sha-${SHA}". Aquí resolvemos su digest inmutable.
           echo "Resolviendo digest para ${REPO}:sha-${SHA} en ${ACR_NAME}…"
           if ! DIGEST="$(az acr repository show \
                 -n "$ACR_NAME" \
@@ -218,7 +217,6 @@ jobs:
           [[ -n "${MIN_REPLICAS:-}" ]] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
           [[ -n "${MAX_REPLICAS:-}" ]] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
 
-          # Soporte para múltiples líneas KEY=VALUE en EXTRA_ENV
           if [[ -n "${EXTRA_ENV:-}" ]]; then
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
