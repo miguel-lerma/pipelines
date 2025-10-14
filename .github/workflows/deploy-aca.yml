@@ -1,55 +1,141 @@
 ---
-name: Reusable - Deploy ACA
+name: Reusable - Deploy to Azure Container Apps
 
 on:
   workflow_call:
     inputs:
+      # Contexto
       environment:
-        required: true
+        description: Entorno lógico (dev/qa/prd) solo informativo
+        required: false
         type: string
+        default: dev
       commit_sha:
+        description: SHA a desplegar (se usa para etiquetar la imagen)
         required: true
         type: string
+
+      # Azure / OIDC (REQUIRED)
+      azure_client_id:
+        required: true
+        type: string
+      azure_tenant_id:
+        required: true
+        type: string
+      azure_subscription_id:
+        required: true
+        type: string
+
+      # Destino ACA
+      resource_group:
+        required: true
+        type: string
+      aca_environment:
+        required: true
+        type: string
+      location:
+        required: true
+        type: string
+      app_name:
+        required: true
+        type: string
+
+      # ACR
+      acr_login_server:
+        description: itxzacrlab01.azurecr.io
+        required: true
+        type: string
+      image_repository:
+        description: nombre de repo dentro del ACR (sin el login server)
+        required: true
+        type: string
+
+      # Identidad administrada de la ACA para pulls desde ACR (opcional pero recomendado)
+      acr_identity_client_id:
+        required: false
+        type: string
+        default: ""
+
+      # Parámetros opcionales de la app
+      ingress:
+        required: false
+        type: string
+        default: ""
+      target_port:
+        required: false
+        type: string
+        default: ""
+      cpu:
+        required: false
+        type: string
+        default: ""
+      memory:
+        required: false
+        type: string
+        default: ""
+      min_replicas:
+        required: false
+        type: string
+        default: ""
+      max_replicas:
+        required: false
+        type: string
+        default: ""
+      extra_env:
+        required: false
+        type: string
+        default: ""
 
 permissions:
   id-token: write
   contents: read
 
-env:
-  # ====== IDs Azure centralizados (OIDC SP) ======
-  AZURE_CLIENT_ID: d986d4dd-0537-4052-9ab0-1e0dbf02e43b
-  AZURE_TENANT_ID: a3907a6d-bbd7-425a-9e46-d06e8a173ba6
-  AZURE_SUBSCRIPTION_ID: a7fb9745-e74d-4e51-b7da-75b90a77b7fd
-
-  # ====== Parámetros de la app/infra ======
-  RESOURCE_GROUP: ITX-RG-01
-  ACA_ENVIRONMENT: env-lab-aca
-  LOCATION: eastus
-  APP_NAME: be-dev
-
-  # ====== ACR ======
-  ACR_LOGIN_SERVER: itxzacrlab01.azurecr.io    # <nombre>.azurecr.io
-  ACR_REPOSITORY: archetype-back               # repo donde CI empuja las imágenes (sin registry)
-  ACR_PULL_IDENTITY: system                    # usa la identidad 'system' de la ACA para hacer pull
-
 jobs:
   deploy:
     name: Deploy ${{ inputs.environment }}
-    runs-on: ubuntu-22.04
-    environment: ${{ inputs.environment }}
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout (repo que llama)
-        uses: actions/checkout@v4
+      - name: Mostrar inputs (debug)
+        run: |
+          echo "env=${{ inputs.environment }}"
+          echo "commit_sha=${{ inputs.commit_sha }}"
+          echo "rg=${{ inputs.resource_group }}"
+          echo "aca_env=${{ inputs.aca_environment }}"
+          echo "location=${{ inputs.location }}"
+          echo "app=${{ inputs.app_name }}"
+          echo "acr_login_server=${{ inputs.acr_login_server }}"
+          echo "image_repository=${{ inputs.image_repository }}"
+          echo "acr_identity_client_id=${{ inputs.acr_identity_client_id }}"
 
-      - name: Login to Azure with OIDC
+      - name: Validar inputs requeridos
+        shell: bash
+        run: |
+          set -euo pipefail
+          req=(azure_client_id azure_tenant_id azure_subscription_id resource_group aca_environment location app_name acr_login_server image_repository commit_sha)
+          for k in "${req[@]}"; do
+            v="${{ inputs[format('{0}', 'dummy')] }}" # dummy para inicializar
+          done
+          # Validación manual para mensajes claros
+          [ -n "${{ inputs.azure_client_id }}" ] || { echo "Falta azure_client_id"; exit 1; }
+          [ -n "${{ inputs.azure_tenant_id }}" ] || { echo "Falta azure_tenant_id"; exit 1; }
+          [ -n "${{ inputs.azure_subscription_id }}" ] || { echo "Falta azure_subscription_id"; exit 1; }
+          [ -n "${{ inputs.resource_group }}" ] || { echo "Falta resource_group"; exit 1; }
+          [ -n "${{ inputs.aca_environment }}" ] || { echo "Falta aca_environment"; exit 1; }
+          [ -n "${{ inputs.location }}" ] || { echo "Falta location"; exit 1; }
+          [ -n "${{ inputs.app_name }}" ] || { echo "Falta app_name"; exit 1; }
+          [ -n "${{ inputs.acr_login_server }}" ] || { echo "Falta acr_login_server"; exit 1; }
+          [ -n "${{ inputs.image_repository }}" ] || { echo "Falta image_repository"; exit 1; }
+          [ -n "${{ inputs.commit_sha }}" ] || { echo "Falta commit_sha"; exit 1; }
+
+      - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ env.AZURE_CLIENT_ID }}
-          tenant-id: ${{ env.AZURE_TENANT_ID }}
-          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ inputs.azure_client_id }}
+          tenant-id: ${{ inputs.azure_tenant_id }}
+          subscription-id: ${{ inputs.azure_subscription_id }}
 
-      - name: Azure CLI version & install containerapp extension
+      - name: Instalar/actualizar extensión containerapp
         shell: bash
         run: |
           set -euo pipefail
@@ -57,77 +143,72 @@ jobs:
           if ! az extension show --name containerapp >/dev/null 2>&1; then
             az extension add --name containerapp -y
           else
-            # Si falla el update no queremos romper el deploy
             az extension update --name containerapp -y || true
           fi
 
-      - name: Sanity checks (RG, ACA env, App, ACR)
+      - name: Verificar recursos destino
         env:
-          RG: ${{ env.RESOURCE_GROUP }}
-          ACA_ENV: ${{ env.ACA_ENVIRONMENT }}
-          APP: ${{ env.APP_NAME }}
-          ACR_LOGIN: ${{ env.ACR_LOGIN_SERVER }}
+          RG: ${{ inputs.resource_group }}
+          ACA_ENV: ${{ inputs.aca_environment }}
+          APP: ${{ inputs.app_name }}
+          ACR_LOGIN: ${{ inputs.acr_login_server }}
         shell: bash
         run: |
           set -euo pipefail
-          # RG y recursos deben existir (esto falla si no existen)
           az group show -n "$RG" -o none
           az containerapp env show -g "$RG" -n "$ACA_ENV" -o none
           az containerapp show -g "$RG" -n "$APP" -o none
+          if [ -n "${ACR_LOGIN:-}" ]; then
+            ACR_NAME="${ACR_LOGIN%%.*}"
+            az acr show -n "$ACR_NAME" -o none
+          fi
 
-          # Validar ACR
-          ACR_NAME="$ACR_LOGIN"
-          ACR_NAME="${ACR_NAME%%.*}"  # itxzacrlab01
-          az acr show -n "$ACR_NAME" -o none
-
-      - name: Configurar credenciales del ACR en la ACA (con MI)
+      - name: Configurar registro de imágenes de la ACA (si aplica)
+        if: ${{ inputs.acr_identity_client_id != '' }}
         env:
-          RG: ${{ env.RESOURCE_GROUP }}
-          APP: ${{ env.APP_NAME }}
-          ACR_LOGIN: ${{ env.ACR_LOGIN_SERVER }}
-          ACR_PULL_IDENTITY: ${{ env.ACR_PULL_IDENTITY }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          APP_NAME: ${{ inputs.app_name }}
+          ACR_LOGIN: ${{ inputs.acr_login_server }}
+          ACR_IDENTITY_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
         shell: bash
         run: |
           set -euo pipefail
-          # Nota: no usar --yes (no existe en este comando)
-          # --identity admite 'system' o el clientId de una UAI.
+          # Registrar el ACR en la app para pulls con identidad administrada
           az containerapp registry set \
-            -g "$RG" -n "$APP" \
+            -g "$RESOURCE_GROUP" -n "$APP_NAME" \
             --server "$ACR_LOGIN" \
-            --identity "$ACR_PULL_IDENTITY" || true
+            --identity "$ACR_IDENTITY_CLIENT_ID"
 
-      - name: Deploy (az containerapp update --image)
+      - name: Desplegar imagen (az containerapp update)
         env:
-          RG: ${{ env.RESOURCE_GROUP }}
-          APP: ${{ env.APP_NAME }}
-          ACR_LOGIN: ${{ env.ACR_LOGIN_SERVER }}
-          REPO: ${{ env.ACR_REPOSITORY }}
-          SHA: ${{ inputs.commit_sha }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          APP_NAME: ${{ inputs.app_name }}
+          IMAGE_REF: ${{ inputs.acr_login_server }}/${{ inputs.image_repository }}:sha-${{ inputs.commit_sha }}
+          INGRESS: ${{ inputs.ingress }}
+          TARGET_PORT: ${{ inputs.target_port }}
+          CPU: ${{ inputs.cpu }}
+          MEMORY: ${{ inputs.memory }}
+          MIN_REPLICAS: ${{ inputs.min_replicas }}
+          MAX_REPLICAS: ${{ inputs.max_replicas }}
+          EXTRA_ENV: ${{ inputs.extra_env }}
         shell: bash
         run: |
           set -euo pipefail
+          echo "Deploying image: $IMAGE_REF"
+          PARAMS=( -g "$RESOURCE_GROUP" -n "$APP_NAME" --image "$IMAGE_REF" )
+          [ -n "${INGRESS:-}" ]      && PARAMS+=( --ingress "$INGRESS" )
+          [ -n "${TARGET_PORT:-}" ]  && PARAMS+=( --target-port "$TARGET_PORT" )
+          [ -n "${CPU:-}" ]          && PARAMS+=( --cpu "$CPU" )
+          [ -n "${MEMORY:-}" ]       && PARAMS+=( --memory "$MEMORY" )
+          [ -n "${MIN_REPLICAS:-}" ] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
+          [ -n "${MAX_REPLICAS:-}" ] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
 
-          IMAGE_TAG="sha-${SHA}"
-          IMAGE_REF="${ACR_LOGIN}/${REPO}:${IMAGE_TAG}"
-
-          echo "Usando imagen: ${IMAGE_REF}"
-
-          PARAMS=( -g "$RG" -n "$APP" --image "$IMAGE_REF" )
-
-          # Si necesitas parámetros opcionales (ingress/ports/recursos), añade
-          # variables de entorno y descomenta estas líneas de ejemplo:
-          # [ -n "${INGRESS:-}" ]      && PARAMS+=( --ingress "$INGRESS" )
-          # [ -n "${TARGET_PORT:-}" ]  && PARAMS+=( --target-port "$TARGET_PORT" )
-          # [ -n "${CPU:-}" ]          && PARAMS+=( --cpu "$CPU" )
-          # [ -n "${MEMORY:-}" ]       && PARAMS+=( --memory "$MEMORY" )
-          # [ -n "${MIN_REPLICAS:-}" ] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
-          # [ -n "${MAX_REPLICAS:-}" ] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
-          # if [ -n "${EXTRA_ENV:-}" ]; then
-          #   while IFS= read -r line; do
-          #     [ -z "$line" ] && continue
-          #     PARAMS+=( --set-env-vars "$line" )
-          #   done <<< "$EXTRA_ENV"
-          # fi
+          if [ -n "${EXTRA_ENV:-}" ]; then
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              PARAMS+=( --set-env-vars "$line" )
+            done <<< "$EXTRA_ENV"
+          fi
 
           az containerapp update "${PARAMS[@]}"
           echo "✅ Deploy completado."
