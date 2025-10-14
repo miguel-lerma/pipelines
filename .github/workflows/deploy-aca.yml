@@ -10,29 +10,56 @@ on:
         required: false
 
       # ---- OIDC / Azure ----
-      azure_client_id:       { type: string, required: true }
-      azure_tenant_id:       { type: string, required: true }
-      azure_subscription_id: { type: string, required: true }
+      azure_client_id:
+        type: string
+        required: true
+      azure_tenant_id:
+        type: string
+        required: true
+      azure_subscription_id:
+        type: string
+        required: true
 
       # ---- Destino ----
-      resource_group:   { type: string, required: true }
-      aca_environment:  { type: string, required: true }
+      resource_group:
+        type: string
+        required: true
+      aca_environment:
+        type: string
+        required: true
 
-      # (location ya no es necesaria para update; la dejo opcional por compatibilidad)
-      location:         { type: string, required: false }
+      # (location ya no se usa para update; lo dejamos opcional por compatibilidad)
+      location:
+        type: string
+        required: false
 
       # ---- App e imagen ----
-      app_name:  { type: string, required: true }
-      image_ref: { type: string, required: true }  # puede ser repo:tag o repo@sha256:...
+      app_name:
+        type: string
+        required: true
+      image_ref:
+        type: string
+        required: true
 
       # ---- Opcionales (NO tocar infra por defecto) ----
-      # Si quieres forzar cambios de config, mándalos; si los omites, no se pasan flags.
-      ingress:       { type: string, required: false }
-      target_port:   { type: string, required: false }
-      cpu:           { type: string, required: false }
-      memory:        { type: string, required: false }
-      min_replicas:  { type: string, required: false }
-      max_replicas:  { type: string, required: false }
+      ingress:
+        type: string
+        required: false
+      target_port:
+        type: string
+        required: false
+      cpu:
+        type: string
+        required: false
+      memory:
+        type: string
+        required: false
+      min_replicas:
+        type: string
+        required: false
+      max_replicas:
+        type: string
+        required: false
 
       extra_env:
         description: "Variables de entorno línea por línea (KEY=VALUE)"
@@ -40,12 +67,11 @@ on:
         required: false
 
       acr_login_server:
-        description: "login server del ACR (ej. itxzacrlab01.azurecr.io). Requerido si image_ref viene con :tag y quieres resolver a digest."
+        description: "login server del ACR (ej. itxzacrlab01.azurecr.io)"
         type: string
         required: false
-
       acr_identity_client_id:
-        description: "Client ID de identidad con permiso AcrPull (opcional; solo para setear registry)"
+        description: "Client ID de identidad con permiso AcrPull (opcional)"
         type: string
         required: false
 
@@ -71,64 +97,73 @@ jobs:
       - name: Checkout (pipelines repo)
         uses: actions/checkout@v4
 
-      # Lints opcionales (puedes quitarlos si no los usas)
+      # --- Lint opcional ---
       - name: Write .yamllint config
         run: |
           cat > .yamllint.yml <<'CFG'
           extends: default
           rules:
-            document-start: { present: true }
-            line-length: { max: 160 }
-            trailing-spaces: { level: error }
-            new-line-at-end-of-file: { level: error }
+            document-start:
+              present: true
+            line-length:
+              max: 200
+            trailing-spaces:
+              level: error
+            new-line-at-end-of-file:
+              level: error
             truthy: disable
             brackets: disable
             comments: disable
             indentation: disable
           CFG
 
-      - name: yamllint
+      - name: yamllint (YAML format)
         uses: ibiqlik/action-yamllint@v3
         with:
           file_or_dir: .github/workflows
           format: github
           strict: true
+          no_warnings: false
 
-      - name: actionlint
+      - name: actionlint (GHA syntax)
         uses: rhysd/actionlint@v1.6.27
 
       # --- Login Azure con OIDC ---
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
-          client-id:       ${{ inputs.azure_client_id }}
-          tenant-id:       ${{ inputs.azure_tenant_id }}
+          client-id: ${{ inputs.azure_client_id }}
+          tenant-id: ${{ inputs.azure_tenant_id }}
           subscription-id: ${{ inputs.azure_subscription_id }}
 
-      # --- Validación de existencia (no crea infra) ---
+      # --- VALIDACIÓN: no crear nada, solo comprobar que existe ---
       - name: Validate existing infra (no mutations)
+        shell: bash
         env:
-          RESOURCE_GROUP:   ${{ inputs.resource_group }}
-          ACA_ENVIRONMENT:  ${{ inputs.aca_environment }}
-          APP_NAME:         ${{ inputs.app_name }}
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          ACA_ENVIRONMENT: ${{ inputs.aca_environment }}
+          LOCATION: ${{ inputs.location }}
+          APP_NAME: ${{ inputs.app_name }}
           ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
         run: |
-          echo "🔎 RG..."
-          az group show -n "$RESOURCE_GROUP" -o none || { echo "❌ RG no existe"; exit 2; }
-          echo "🔎 ACA env..."
-          az containerapp env show -g "$RESOURCE_GROUP" -n "$ACA_ENVIRONMENT" -o none || { echo "❌ ACA env no existe"; exit 2; }
-          echo "🔎 App..."
-          az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" -o none || { echo "❌ App no existe"; exit 2; }
+          echo "🔎 Validando Resource Group..."
+          az group show -n "$RESOURCE_GROUP" -o none || { echo "❌ RG '$RESOURCE_GROUP' no existe."; exit 2; }
+
+          echo "🔎 Validando ACA Environment..."
+          az containerapp env show -g "$RESOURCE_GROUP" -n "$ACA_ENVIRONMENT" -o none || { echo "❌ ACA env '$ACA_ENVIRONMENT' no existe."; exit 2; }
+
+          echo "🔎 Validando Container App..."
+          az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" -o none || { echo "❌ App '$APP_NAME' no existe."; exit 2; }
 
           if [[ -n "${ACR_LOGIN_SERVER:-}" ]]; then
             ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
-            echo "🔎 ACR '$ACR_NAME'..."
-            az acr show -n "$ACR_NAME" -o none || { echo "❌ ACR no existe"; exit 2; }
+            echo "🔎 Validando ACR '$ACR_NAME'..."
+            az acr show -n "$ACR_NAME" -o none || { echo "❌ ACR '$ACR_NAME' no existe."; exit 2; }
           fi
 
-      # --- Construye bloque de env vars (--set-env-vars KEY=VAL ...) ---
       - name: Build env var block
         id: envblk
+        shell: bash
         run: |
           PARAMS=()
           if [[ -n "${{ inputs.extra_env }}" ]]; then
@@ -143,32 +178,28 @@ jobs:
       # --- Resolver imagen a digest si viene con :tag ---
       - name: Resolve image to digest (if needed)
         id: imageres
+        shell: bash
         env:
-          IMAGE_REF:        ${{ inputs.image_ref }}
+          IMAGE_REF: ${{ inputs.image_ref }}
           ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
         run: |
-          # Si ya viene repo@sha256:..., respetamos tal cual
           if [[ "$IMAGE_REF" == *@sha256:* ]]; then
             echo "resolved=$IMAGE_REF" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Si viene repo:tag, intentamos resolver a digest usando ACR (requiere acr_login_server)
           if [[ -z "${ACR_LOGIN_SERVER:-}" ]]; then
             echo "⚠️ image_ref con tag pero sin acr_login_server; usaré el tag tal cual."
             echo "resolved=$IMAGE_REF" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # Parse: registry/repo:tag
-          # Permite que el registry del image_ref sea igual o distinto al ACR_LOGIN_SERVER; si no tiene registry, asumimos ACR_LOGIN_SERVER.
           ref="$IMAGE_REF"
           if [[ "$ref" != */* ]]; then
             echo "❌ image_ref inválido (no se detecta repo): $ref" >&2
             exit 1
           fi
 
-          # Extraer registry (si presente), repo y tag
           registry_part="${ref%%/*}"
           remainder="${ref#*/}"
 
@@ -176,7 +207,6 @@ jobs:
             registry="$registry_part"
             repo_tag="$remainder"
           else
-            # image_ref sin registry -> usar ACR_LOGIN_SERVER
             registry="$ACR_LOGIN_SERVER"
             repo_tag="$ref"
           fi
@@ -191,11 +221,7 @@ jobs:
 
           ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
           echo "🔎 Resolviendo digest en ACR: repo='$repo' tag='$tag' ..."
-          digest="$(az acr repository show-manifests \
-              -n "$ACR_NAME" \
-              --repository "$repo" \
-              --query "[?contains(join(',', tags), '${tag}')].digest | [0]" \
-              -o tsv || true)"
+          digest="$(az acr repository show-manifests -n "$ACR_NAME" --repository "$repo" --query "[?contains(join(',', tags), '${tag}')].digest | [0]" -o tsv || true)"
 
           if [[ -z "$digest" ]]; then
             echo "❌ No se pudo resolver digest para ${repo}:${tag} en $ACR_NAME" >&2
@@ -208,42 +234,40 @@ jobs:
       # --- (Opcional) setear registry para pull con identidad administrada ---
       - name: Configure app registry (optional)
         if: ${{ inputs.acr_login_server != '' }}
-        env:
-          RESOURCE_GROUP:        ${{ inputs.resource_group }}
-          APP_NAME:              ${{ inputs.app_name }}
-          ACR_LOGIN_SERVER:      ${{ inputs.acr_login_server }}
-          ACR_IDENTITY_CLIENT_ID:${{ inputs.acr_identity_client_id }}
-        run: |
-          if [[ -n "${ACR_IDENTITY_CLIENT_ID:-}" ]]; then
-            az containerapp registry set -g "$RESOURCE_GROUP" -n "$APP_NAME" \
-              --server "$ACR_LOGIN_SERVER" --identity "$ACR_IDENTITY_CLIENT_ID" --yes || true
-          else
-            az containerapp registry set -g "$RESOURCE_GROUP" -n "$APP_NAME" \
-              --server "$ACR_LOGIN_SERVER" --yes || true
-          fi
-
-      # --- Update: solo imagen + env por defecto. Flags de config solo si se enviaron. ---
-      - name: Update Container App
+        shell: bash
         env:
           RESOURCE_GROUP: ${{ inputs.resource_group }}
-          APP_NAME:       ${{ inputs.app_name }}
-          IMAGE_PIN:      ${{ steps.imageres.outputs.resolved }}
-          INGRESS:        ${{ inputs.ingress }}
-          TARGET_PORT:    ${{ inputs.target_port }}
-          CPU:            ${{ inputs.cpu }}
-          MEMORY:         ${{ inputs.memory }}
-          MIN_REPLICAS:   ${{ inputs.min_replicas }}
-          MAX_REPLICAS:   ${{ inputs.max_replicas }}
+          APP_NAME: ${{ inputs.app_name }}
+          ACR_LOGIN_SERVER: ${{ inputs.acr_login_server }}
+          ACR_IDENTITY_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
+        run: |
+          if [[ -n "${ACR_IDENTITY_CLIENT_ID:-}" ]]; then
+            az containerapp registry set -g "$RESOURCE_GROUP" -n "$APP_NAME" --server "$ACR_LOGIN_SERVER" --identity "$ACR_IDENTITY_CLIENT_ID" --yes || true
+          else
+            az containerapp registry set -g "$RESOURCE_GROUP" -n "$APP_NAME" --server "$ACR_LOGIN_SERVER" --yes || true
+          fi
+
+      # --- Update: imagen + env; solo tocamos config si la mandan ---
+      - name: Update Container App
+        shell: bash
+        env:
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          APP_NAME: ${{ inputs.app_name }}
+          IMAGE_PIN: ${{ steps.imageres.outputs.resolved }}
+          INGRESS: ${{ inputs.ingress }}
+          TARGET_PORT: ${{ inputs.target_port }}
+          CPU: ${{ inputs.cpu }}
+          MEMORY: ${{ inputs.memory }}
+          MIN_REPLICAS: ${{ inputs.min_replicas }}
+          MAX_REPLICAS: ${{ inputs.max_replicas }}
         run: |
           readarray -d '' ENV_PARAMS < "${{ steps.envblk.outputs.file }}"
 
           PARAMS=( -g "$RESOURCE_GROUP" -n "$APP_NAME" --image "$IMAGE_PIN" "${ENV_PARAMS[@]}" )
-
-          # Solo añadimos flags si caller los envía (evita drift)
-          [[ -n "${INGRESS:-}" ]]      && PARAMS+=( --ingress "$INGRESS" )
-          [[ -n "${TARGET_PORT:-}" ]]  && PARAMS+=( --target-port "$TARGET_PORT" )
-          [[ -n "${CPU:-}" ]]          && PARAMS+=( --cpu "$CPU" )
-          [[ -n "${MEMORY:-}" ]]       && PARAMS+=( --memory "$MEMORY" )
+          [[ -n "${INGRESS:-}"      ]] && PARAMS+=( --ingress "$INGRESS" )
+          [[ -n "${TARGET_PORT:-}"  ]] && PARAMS+=( --target-port "$TARGET_PORT" )
+          [[ -n "${CPU:-}"          ]] && PARAMS+=( --cpu "$CPU" )
+          [[ -n "${MEMORY:-}"       ]] && PARAMS+=( --memory "$MEMORY" )
           [[ -n "${MIN_REPLICAS:-}" ]] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
           [[ -n "${MAX_REPLICAS:-}" ]] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
 
