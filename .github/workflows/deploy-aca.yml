@@ -5,7 +5,7 @@ on:
   workflow_call:
     inputs:
       environment:
-        description: "GitHub Environment a aplicar (dev, stg, prd, etc.)"
+        description: "GitHub Environment a aplicar (dev, qa, prod, etc.)"
         type: string
         required: true
 
@@ -39,27 +39,27 @@ on:
         type: string
         required: true
 
-      # ---- Ingress/puerto ----
+      # ---- Ingress/puerto (OPCIONALES) ----
       ingress:
         type: string
-        required: true
+        required: false
       target_port:
         type: string
-        required: true
+        required: false
 
-      # ---- Escala/recursos ----
+      # ---- Escala/recursos (OPCIONALES) ----
       cpu:
         type: string
-        required: true
+        required: false
       memory:
         type: string
-        required: true
+        required: false
       min_replicas:
         type: string
-        required: true
+        required: false
       max_replicas:
         type: string
-        required: true
+        required: false
 
       # ---- Opcionales ----
       extra_env:
@@ -67,7 +67,7 @@ on:
         type: string
         required: false
       acr_login_server:
-        description: "login server del ACR (opcional, para setear registry en ACA)"
+        description: "Login server del ACR (opcional, para setear registry en ACA)"
         type: string
         required: false
       acr_identity_client_id:
@@ -84,14 +84,12 @@ defaults:
 jobs:
   deploy:
     name: Deploy ${{ inputs.environment }}
-    # LIGA el job al Environment del repo que llama (dev/stg/prd)
     environment: ${{ inputs.environment }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
       contents: read
 
-    # Evita despliegues concurrentes al mismo app+env
     concurrency:
       group: aca-${{ inputs.app_name }}-${{ inputs.environment }}
       cancel-in-progress: true
@@ -100,19 +98,14 @@ jobs:
       - name: Checkout repo (caller)
         uses: actions/checkout@v4
 
-      # --- Lint opcional (del repo caller) ---
       - name: Write .yamllint config
         run: |
           cat > .yamllint.yml <<'CFG'
           extends: default
           rules:
-            document-start:
-              present: true
-            trailing-spaces:
-              level: error
-            new-line-at-end-of-file:
-              level: error
-            # Reglas ruidosas para GH expressions:
+            document-start: { present: true }
+            trailing-spaces: { level: error }
+            new-line-at-end-of-file: { level: error }
             colons: disable
             braces: disable
             line-length: disable
@@ -135,7 +128,6 @@ jobs:
         with:
           shellcheck: false
 
-      # --- Login Azure con OIDC ---
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -143,7 +135,6 @@ jobs:
           tenant-id: ${{ inputs.azure_tenant_id }}
           subscription-id: ${{ inputs.azure_subscription_id }}
 
-      # Asegurar extensión de ACA (idempotente)
       - name: Ensure Azure CLI containerapp extension
         run: |
           set -euo pipefail
@@ -153,7 +144,6 @@ jobs:
             az extension update --name containerapp -y || true
           fi
 
-      # --- VALIDACIÓN: no crear nada, solo comprobar que existe ---
       - name: Validate existing infra (no mutations)
         env:
           RESOURCE_GROUP: ${{ inputs.resource_group }}
@@ -167,32 +157,12 @@ jobs:
           : "${ACA_ENVIRONMENT:?missing input 'aca_environment'}"
           : "${LOCATION:?missing input 'location'}"
           : "${APP_NAME:?missing input 'app_name'}"
-
-          echo "🔎 Validando Resource Group..."
-          if ! az group show -n "$RESOURCE_GROUP" -o none; then
-            echo "❌ Resource group '$RESOURCE_GROUP' no existe. Este workflow NO crea infraestructura."
-            exit 2
-          fi
-
-          echo "🔎 Validando ACA Environment..."
-          if ! az containerapp env show -g "$RESOURCE_GROUP" -n "$ACA_ENVIRONMENT" -o none; then
-            echo "❌ ACA env '$ACA_ENVIRONMENT' no existe en RG '$RESOURCE_GROUP'. Créalo fuera del pipeline."
-            exit 2
-          fi
-
-          echo "🔎 Validando Container App..."
-          if ! az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" -o none; then
-            echo "❌ La Container App '$APP_NAME' no existe en RG '$RESOURCE_GROUP'. Créala fuera del pipeline."
-            exit 2
-          fi
-
+          az group show -n "$RESOURCE_GROUP" -o none
+          az containerapp env show -g "$RESOURCE_GROUP" -n "$ACA_ENVIRONMENT" -o none
+          az containerapp show -g "$RESOURCE_GROUP" -n "$APP_NAME" -o none
           if [[ -n "${ACR_LOGIN_SERVER:-}" ]]; then
             ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
-            echo "🔎 Validando ACR '$ACR_NAME'..."
-            if ! az acr show -n "$ACR_NAME" -o none; then
-              echo "❌ ACR '$ACR_NAME' no existe. Créalo/configúralo fuera del pipeline."
-              exit 2
-            fi
+            az acr show -n "$ACR_NAME" -o none
           fi
 
       - name: Build env var block
@@ -201,17 +171,14 @@ jobs:
           set -euo pipefail
           PARAMS=()
           if [[ -n "${{ inputs.extra_env }}" ]]; then
-            # Acepta múltiples líneas KEY=VALUE
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
               PARAMS+=( --set-env-vars "$line" )
             done <<< "${{ inputs.extra_env }}"
           fi
-          # Serializa el array para recuperarlo luego
           printf '%s\0' "${PARAMS[@]}" > envparams.bin
           echo "file=envparams.bin" >> "$GITHUB_OUTPUT"
 
-      # --- Solo actualización de app existente ---
       - name: Update existing Container App
         env:
           RESOURCE_GROUP: ${{ inputs.resource_group }}
@@ -227,10 +194,8 @@ jobs:
           ACR_IDENTITY_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
         run: |
           set -euo pipefail
-          # Recupera los --set-env-vars serializados
           readarray -d '' ENV_PARAMS < "${{ steps.envblk.outputs.file }}"
 
-          # (Opcional) Configurar registry de la app si fue provisto
           if [[ -n "${ACR_LOGIN_SERVER:-}" ]]; then
             if [[ -n "${ACR_IDENTITY_CLIENT_ID:-}" ]]; then
               az containerapp registry set \
@@ -246,17 +211,16 @@ jobs:
             fi
           fi
 
-          echo "🚀 Actualizando imagen y configuración..."
-          az containerapp update \
-            -g "$RESOURCE_GROUP" \
-            -n "$APP_NAME" \
-            --image "$IMAGE_REF" \
-            --ingress "$INGRESS" \
-            --target-port "$TARGET_PORT" \
-            --cpu "$CPU" \
-            --memory "$MEMORY" \
-            --min-replicas "$MIN_REPLICAS" \
-            --max-replicas "$MAX_REPLICAS" \
-            "${ENV_PARAMS[@]}"
+          PARAMS=( -g "$RESOURCE_GROUP" -n "$APP_NAME" --image "$IMAGE_REF" )
+          [[ -n "${INGRESS:-}" ]] && PARAMS+=( --ingress "$INGRESS" )
+          [[ -n "${TARGET_PORT:-}" ]] && PARAMS+=( --target-port "$TARGET_PORT" )
+          [[ -n "${CPU:-}" ]] && PARAMS+=( --cpu "$CPU" )
+          [[ -n "${MEMORY:-}" ]] && PARAMS+=( --memory "$MEMORY" )
+          [[ -n "${MIN_REPLICAS:-}" ]] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
+          [[ -n "${MAX_REPLICAS:-}" ]] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
+          if [[ ${#ENV_PARAMS[@]} -gt 0 ]]; then
+            PARAMS+=( "${ENV_PARAMS[@]}" )
+          fi
 
+          az containerapp update "${PARAMS[@]}"
           echo "✅ Despliegue (update) completado."
