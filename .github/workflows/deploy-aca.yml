@@ -14,23 +14,57 @@ on:
         required: false
 
       # Los siguientes quedan opcionales; si no vienen, se leen de vars.* del Environment
-      azure_client_id:        { type: string, required: false }
-      azure_tenant_id:        { type: string, required: false }
-      azure_subscription_id:  { type: string, required: false }
-      resource_group:         { type: string, required: false }
-      aca_environment:        { type: string, required: false }
-      location:               { type: string, required: false }
-      app_name:               { type: string, required: false }
-      image_ref:              { type: string, required: false }
-      ingress:                { type: string, required: false }
-      target_port:            { type: string, required: false }
-      cpu:                    { type: string, required: false }
-      memory:                 { type: string, required: false }
-      min_replicas:           { type: string, required: false }
-      max_replicas:           { type: string, required: false }
-      extra_env:              { type: string, required: false }
-      acr_login_server:       { type: string, required: false }
-      acr_identity_client_id: { type: string, required: false }
+      azure_client_id:
+        type: string
+        required: false
+      azure_tenant_id:
+        type: string
+        required: false
+      azure_subscription_id:
+        type: string
+        required: false
+      resource_group:
+        type: string
+        required: false
+      aca_environment:
+        type: string
+        required: false
+      location:
+        type: string
+        required: false
+      app_name:
+        type: string
+        required: false
+      image_ref:
+        type: string
+        required: false
+      ingress:
+        type: string
+        required: false
+      target_port:
+        type: string
+        required: false
+      cpu:
+        type: string
+        required: false
+      memory:
+        type: string
+        required: false
+      min_replicas:
+        type: string
+        required: false
+      max_replicas:
+        type: string
+        required: false
+      extra_env:
+        type: string
+        required: false
+      acr_login_server:
+        type: string
+        required: false
+      acr_identity_client_id:
+        type: string
+        required: false
 
 defaults:
   run:
@@ -54,7 +88,7 @@ jobs:
       - name: Checkout (caller)
         uses: actions/checkout@v4
 
-      # Lints no bloqueantes (para mantener higiene sin romper flujo)
+      # Lints no bloqueantes (higiene sin romper flujo)
       - name: Write .yamllint config
         run: |
           cat > .yamllint.yml <<'CFG'
@@ -72,6 +106,7 @@ jobs:
             indentation: disable
             empty-lines: disable
           CFG
+
       - name: yamllint (non-blocking)
         uses: ibiqlik/action-yamllint@v3
         with:
@@ -80,6 +115,7 @@ jobs:
           strict: true
           no_warnings: false
         continue-on-error: true
+
       - name: actionlint (non-blocking)
         uses: rhysd/actionlint@v1.6.27
         with:
@@ -89,8 +125,8 @@ jobs:
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
-          client-id:       ${{ inputs.azure_client_id       || vars.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ inputs.azure_tenant_id       || vars.AZURE_TENANT_ID }}
+          client-id: ${{ inputs.azure_client_id       || vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ inputs.azure_tenant_id       || vars.AZURE_TENANT_ID }}
           subscription-id: ${{ inputs.azure_subscription_id || vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: Resolver parámetros (fallback a vars.*)
@@ -107,12 +143,15 @@ jobs:
           if [ -z "$img" ]; then
             img="${acr}/${{ vars.IMAGE_NAME }}:sha-${sha}"
           fi
-          echo "rg=$rg"           >> $GITHUB_OUTPUT
-          echo "aca_env=$aca_env" >> $GITHUB_OUTPUT
-          echo "loc=$loc"         >> $GITHUB_OUTPUT
-          echo "app=$app"         >> $GITHUB_OUTPUT
-          echo "acr=$acr"         >> $GITHUB_OUTPUT
-          echo "image=$img"       >> $GITHUB_OUTPUT
+
+          {
+            printf 'rg=%s\n' "$rg"
+            printf 'aca_env=%s\n' "$aca_env"
+            printf 'loc=%s\n' "$loc"
+            printf 'app=%s\n' "$app"
+            printf 'acr=%s\n' "$acr"
+            printf 'image=%s\n' "$img"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Ensure Azure CLI + containerapp extension
         run: |
@@ -125,21 +164,28 @@ jobs:
           fi
 
       - name: Validar recursos existentes (no muta)
+        env:
+          RG: ${{ steps.r.outputs.rg }}
+          ACA_ENV: ${{ steps.r.outputs.aca_env }}
+          APP: ${{ steps.r.outputs.app }}
+          ACR_LOGIN: ${{ steps.r.outputs.acr }}
         run: |
           set -euo pipefail
-          az group show -n "${{ steps.r.outputs.rg }}" -o none
-          az containerapp env show -g "${{ steps.r.outputs.rg }}" -n "${{ steps.r.outputs.aca_env }}" -o none
-          az containerapp show -g "${{ steps.r.outputs.rg }}" -n "${{ steps.r.outputs.app }}" -o none
-          if [[ -n "${{ steps.r.outputs.acr }}" ]]; then
-            az acr show -n "${{ steps.r.outputs.acr%%.*}}" -o none
+          az group show -n "$RG" -o none
+          az containerapp env show -g "$RG" -n "$ACA_ENV" -o none
+          az containerapp show -g "$RG" -n "$APP" -o none
+          if [[ -n "${ACR_LOGIN:-}" ]]; then
+            ACR_NAME="$ACR_LOGIN"
+            ACR_NAME="${ACR_NAME%%.*}"
+            az acr show -n "$ACR_NAME" -o none
           fi
 
       - name: Aplicar permisos de registry (idempotente)
         env:
           RESOURCE_GROUP: ${{ steps.r.outputs.rg }}
-          APP_NAME:       ${{ steps.r.outputs.app }}
-          ACR_LOGIN:      ${{ steps.r.outputs.acr }}
-          ACR_ID:         ${{ inputs.acr_identity_client_id || vars.AZURE_CLIENT_ID }}
+          APP_NAME: ${{ steps.r.outputs.app }}
+          ACR_LOGIN: ${{ steps.r.outputs.acr }}
+          ACR_ID: ${{ inputs.acr_identity_client_id || vars.AZURE_CLIENT_ID }}
         run: |
           set -euo pipefail
           if [ -n "${ACR_LOGIN:-}" ]; then
@@ -153,15 +199,15 @@ jobs:
       - name: Update Container App (imagen + config)
         env:
           RESOURCE_GROUP: ${{ steps.r.outputs.rg }}
-          APP_NAME:       ${{ steps.r.outputs.app }}
-          IMAGE_REF:      ${{ steps.r.outputs.image }}
-          INGRESS:        ${{ inputs.ingress }}
-          TARGET_PORT:    ${{ inputs.target_port }}
-          CPU:            ${{ inputs.cpu }}
-          MEMORY:         ${{ inputs.memory }}
-          MIN_REPLICAS:   ${{ inputs.min_replicas }}
-          MAX_REPLICAS:   ${{ inputs.max_replicas }}
-          EXTRA_ENV:      ${{ inputs.extra_env }}
+          APP_NAME: ${{ steps.r.outputs.app }}
+          IMAGE_REF: ${{ steps.r.outputs.image }}
+          INGRESS: ${{ inputs.ingress }}
+          TARGET_PORT: ${{ inputs.target_port }}
+          CPU: ${{ inputs.cpu }}
+          MEMORY: ${{ inputs.memory }}
+          MIN_REPLICAS: ${{ inputs.min_replicas }}
+          MAX_REPLICAS: ${{ inputs.max_replicas }}
+          EXTRA_ENV: ${{ inputs.extra_env }}
         run: |
           set -euo pipefail
           PARAMS=( -g "$RESOURCE_GROUP" -n "$APP_NAME" --image "$IMAGE_REF" )
