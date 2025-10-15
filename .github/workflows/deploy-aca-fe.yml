@@ -1,47 +1,46 @@
 ---
-name: Reusable - Deploy Frontend to Azure Container Apps
+name: CD - Deploy Frontend to Azure Container Apps (Reusable)
 
 on:
   workflow_call:
     inputs:
-      # Infra / destino
       environment:
+        description: "dev | qa | prd"
         required: true
-        type: string            # dev | qa | prd
+        type: string
       resource_group:
         required: true
         type: string
       location:
         required: true
         type: string
-      aca_environment:
+      aca_env:
         required: true
         type: string
-      fe_app_name:
+      aca_fe_name:
         required: true
         type: string
-      be_app_name:
+      aca_be_name:
         required: true
         type: string
-
-      # Imagen
-      registry:                 # p.ej. itxzacrlab01.azurecr.io
+      registry_login_server:
+        description: "p.ej. itxzacrlab01.azurecr.io"
         required: true
         type: string
-      image_repo:               # p.ej. archetype-front
+      image_repo:
+        description: "nombre del repo de imagen en ACR, p.ej. archetype-front"
         required: true
         type: string
-      sha:                      # commit sha que viene del CI (opcional)
-        required: false
+      sha:
+        description: "sha del commit que taggeó la imagen: sha-<40>"
+        required: true
         type: string
-
-      # Runtime
       ingress:
         default: external
         type: string
       target_port:
-        default: 80
-        type: number
+        default: "80"
+        type: string
       cpu:
         default: "0.25"
         type: string
@@ -55,20 +54,17 @@ on:
         default: "1"
         type: string
       app_env:
+        description: "APP_ENV para FE (dev|qa|production)"
         required: true
-        type: string            # dev | qa | production
-
-    secrets:
-      AZURE_CLIENT_ID:
-        required: true
-      AZURE_TENANT_ID:
-        required: true
-      AZURE_SUBSCRIPTION_ID:
-        required: true
+        type: string
 
 permissions:
   id-token: write
   contents: read
+
+concurrency:
+  group: cd-fe-${{ inputs.environment }}-${{ inputs.sha }}
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -77,15 +73,36 @@ jobs:
     environment: ${{ inputs.environment }}
 
     steps:
-      - name: Checkout (caller repo)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: azurecloud
+          allow-no-subscriptions: false
+          audience: api://AzureADTokenExchange
+
+      - name: Variables comunes (image ref / ACR name)
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          REGISTRY="${{ inputs.registry_login_server }}"
+          IMAGE_REPO="${{ inputs.image_repo }}"
+          SHA="${{ inputs.sha }}"
+
+          IMAGE_REF="${REGISTRY}/${IMAGE_REPO}:sha-${SHA}"
+          # Derivar ACR_NAME de login server
+          ACR_NAME="${REGISTRY%%.azurecr.io}"
+
+          {
+            echo "REGISTRY=${REGISTRY}"
+            echo "IMAGE_REF=${IMAGE_REF}"
+            echo "ACR_NAME=${ACR_NAME}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Ensure containerapp extension
         uses: azure/CLI@v2
@@ -93,77 +110,67 @@ jobs:
           inlineScript: |
             az extension add -n containerapp --upgrade || true
 
-      - name: Compute image ref & vars
-        id: meta
+      - name: Preflight (RG / Env / FE app opcional)
         shell: bash
         run: |
           set -euo pipefail
+          az group show -n "${{ inputs.resource_group }}" -o none
+          az containerapp env show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -o none || \
+          az containerapp env create -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -l "${{ inputs.location }}" -o none
 
-          # Tag de imagen basado en el SHA recibido (o el propio de este run)
-          SHA_IN="${{ inputs.sha }}"
-          if [ -z "${SHA_IN}" ] || [ "${SHA_IN}" = "null" ]; then
-            SHA_IN="${GITHUB_SHA}"
-          fi
-          TAG="sha-${SHA_IN}"
-
-          REGISTRY="${{ inputs.registry }}"
-          IMAGE_REPO="${{ inputs.image_repo }}"
-          IMG="${REGISTRY}/${IMAGE_REPO}:${TAG}"
-
-          echo "sha=${SHA_IN}"   >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}"      >> "$GITHUB_OUTPUT"
-          echo "image=${IMG}"    >> "$GITHUB_OUTPUT"
-
-      - name: Resolve BE internal FQDN
+      - name: Resolver FQDN interno del BE
         id: be
         shell: bash
         run: |
           set -euo pipefail
-          RG="${{ inputs.resource_group }}"
-          BE="${{ inputs.be_app_name }}"
-          FQDN=$(az containerapp show -g "${RG}" -n "${BE}" --query "properties.configuration.ingress.fqdn" -o tsv || true)
+          FQDN="$(az containerapp show \
+            -g "${{ inputs.resource_group }}" \
+            -n "${{ inputs.aca_be_name }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv || true)"
 
           if [[ -z "${FQDN}" || "${FQDN}" != *".internal."* ]]; then
-            echo "ERROR: el backend '${BE}' no tiene FQDN interno (ingress=internal). FQDN='${FQDN:-<empty>}'" >&2
+            echo "El backend '${{ inputs.aca_be_name }}' no tiene FQDN interno (ingress=internal). FQDN='${FQDN:-<vacio>}'" >&2
             exit 1
           fi
-          echo "api_internal=https://${FQDN}" >> "$GITHUB_OUTPUT"
 
-      - name: Ensure MI + registry binding (AcrPull)
+          {
+            echo "API_INTERNAL=https://${FQDN}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Ensure MI + AcrPull + Registry binding
         shell: bash
         run: |
           set -euo pipefail
           RG="${{ inputs.resource_group }}"
-          APP="${{ inputs.fe_app_name }}"
-          REGISTRY="${{ inputs.registry }}"
+          APP="${{ inputs.aca_fe_name }}"
+          ACR_NAME="${{ steps.meta.outputs.ACR_NAME }}"
 
-          # Derivar ACR_NAME de REGISTRY sin usar expresiones de GitHub
-          ACR_NAME="${REGISTRY%.azurecr.io}"
+          ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
 
-          # Obtener el ID del ACR para el scope del rol
-          ACR_ID=$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)
-
-          # Si existe la app, asegurar identidad y rol
           if az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
-            MI=$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)
-            if [ -z "${MI}" ] || [ "${MI}" = "None" ]; then
-              az containerapp identity assign -g "${RG}" -n "${APP}" --system-assigned >/dev/null
-              MI=$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)
+            MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
+            if [[ -z "${MI}" || "${MI}" == "None" ]]; then
+              az containerapp identity assign -g "${RG}" -n "${APP}" --system-assigned -o none
+              MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
             fi
-            HAS=$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)
-            [ "${HAS}" != "0" ] || az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" >/dev/null
 
-            # Bind del registry
-            az containerapp registry set -g "${RG}" -n "${APP}" \
-              --server "${REGISTRY}" --identity system >/dev/null
+            HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)"
+            if [[ "${HAS_ROLE}" == "0" ]]; then
+              az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" -o none
+            fi
+
+            az containerapp registry set \
+              -g "${RG}" -n "${APP}" \
+              --server "${{ steps.meta.outputs.REGISTRY }}" \
+              --identity system -o none || true
           fi
 
       - name: Create or Update FE (ACA)
         env:
-          IMG: ${{ steps.meta.outputs.image }}
+          IMG: ${{ steps.meta.outputs.IMAGE_REF }}
           RG: ${{ inputs.resource_group }}
-          ACA_ENV: ${{ inputs.aca_environment }}
-          APP: ${{ inputs.fe_app_name }}
+          ACA_ENV: ${{ inputs.aca_env }}
+          APP: ${{ inputs.aca_fe_name }}
           INGRESS: ${{ inputs.ingress }}
           TARGET_PORT: ${{ inputs.target_port }}
           CPU: ${{ inputs.cpu }}
@@ -171,38 +178,40 @@ jobs:
           MIN: ${{ inputs.min_replicas }}
           MAX: ${{ inputs.max_replicas }}
           APP_ENV: ${{ inputs.app_env }}
-          API_INTERNAL: ${{ steps.be.outputs.api_internal }}
-          REGISTRY: ${{ inputs.registry }}
+          API_INTERNAL: ${{ steps.be.outputs.API_INTERNAL }}
         shell: bash
         run: |
           set -euo pipefail
-
+          # Variables de entorno que usará Nginx (template) dentro del contenedor
           ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} API_BASE_URL_INTERNAL=${API_INTERNAL}"
 
-          if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
+          if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
             az containerapp create \
-              -g "$RG" -n "$APP" \
-              --environment "$ACA_ENV" \
-              --image "$IMG" \
-              --ingress "$INGRESS" --target-port "$TARGET_PORT" \
-              --registry-server "$REGISTRY" \
+              -g "${RG}" -n "${APP}" \
+              --environment "${ACA_ENV}" \
+              --image "${IMG}" \
+              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
+              --registry-server "${{ steps.meta.outputs.REGISTRY }}" \
               --registry-identity system \
               --system-assigned \
-              --cpu "$CPU" --memory "$MEM" \
-              --min-replicas "$MIN" --max-replicas "$MAX" \
-              --env-vars $ENV_VARS
+              --cpu "${CPU}" --memory "${MEM}" \
+              --min-replicas "${MIN}" --max-replicas "${MAX}" \
+              --env-vars "${ENV_VARS}"
           else
             az containerapp update \
-              -g "$RG" -n "$APP" \
-              --image "$IMG" \
-              --ingress "$INGRESS" --target-port "$TARGET_PORT" \
-              --cpu "$CPU" --memory "$MEM" \
-              --min-replicas "$MIN" --max-replicas "$MAX" \
-              --set-env-vars $ENV_VARS
+              -g "${RG}" -n "${APP}" \
+              --image "${IMG}" \
+              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
+              --cpu "${CPU}" --memory "${MEM}" \
+              --min-replicas "${MIN}" --max-replicas "${MAX}" \
+              --set-env-vars "${ENV_VARS}"
           fi
 
       - name: FE public URL
         shell: bash
         run: |
-          az containerapp show -g "${{ inputs.resource_group }}" -n "${{ inputs.fe_app_name }}" \
+          set -euo pipefail
+          az containerapp show \
+            -g "${{ inputs.resource_group }}" \
+            -n "${{ inputs.aca_fe_name }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv
