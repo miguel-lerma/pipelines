@@ -1,204 +1,192 @@
 ---
-name: Reusable - Deploy to Azure Container Apps
+name: CD - Deploy Backend to Azure Container Apps (Reusable)
 
 on:
   workflow_call:
     inputs:
       environment:
-        required: false
-        type: string
-        default: dev
-      commit_sha:
+        description: "dev | qa | prd"
         required: true
         type: string
-
-      # Azure / OIDC (requeridos)
-      azure_client_id:
-        required: true
-        type: string
-      azure_tenant_id:
-        required: true
-        type: string
-      azure_subscription_id:
-        required: true
-        type: string
-
-      # Destino ACA (requeridos)
       resource_group:
-        required: true
-        type: string
-      aca_environment:
         required: true
         type: string
       location:
         required: true
         type: string
-      app_name:
+      aca_env:
         required: true
         type: string
-
-      # ACR (requeridos)
-      acr_login_server:
+      aca_be_name:
         required: true
         type: string
-      image_repository:
+      registry_login_server:
+        description: "p.ej. itxzacrlab01.azurecr.io"
         required: true
         type: string
-
-      # Identidad MI de la ACA para pulls (opcional)
-      acr_identity_client_id:
-        required: false
+      image_repo:
+        description: "repo de imagen en ACR, p.ej. archetype-back"
+        required: true
         type: string
-        default: ""
-
-      # Parámetros opcionales de la app
+      sha:
+        description: "sha del commit: <40 hex>"
+        required: true
+        type: string
       ingress:
-        required: false
+        description: "internal recomendado para BE"
+        default: internal
         type: string
-        default: ""
       target_port:
-        required: false
+        default: "8080"
         type: string
-        default: ""
       cpu:
-        required: false
+        default: "0.25"
         type: string
-        default: ""
       memory:
-        required: false
+        default: "0.5Gi"
         type: string
-        default: ""
       min_replicas:
-        required: false
+        default: "1"
         type: string
-        default: ""
       max_replicas:
-        required: false
+        default: "1"
         type: string
-        default: ""
-      extra_env:
-        required: false
+      app_env:
+        description: "APP_ENV para BE (dev|qa|production)"
+        required: true
         type: string
-        default: ""
 
 permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: cd-be-${{ inputs.environment }}-${{ inputs.sha }}
+  cancel-in-progress: true
+
 jobs:
   deploy:
-    name: Deploy ${{ inputs.environment }}
+    name: Deploy BE → ${{ inputs.environment }}
     runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
 
     steps:
-      - name: Mostrar inputs (debug)
-        run: |
-          echo "env=${{ inputs.environment }}"
-          echo "commit_sha=${{ inputs.commit_sha }}"
-          echo "rg=${{ inputs.resource_group }}"
-          echo "aca_env=${{ inputs.aca_environment }}"
-          echo "location=${{ inputs.location }}"
-          echo "app=${{ inputs.app_name }}"
-          echo "acr=${{ inputs.acr_login_server }}"
-          echo "repo=${{ inputs.image_repository }}"
-          echo "acr_mi=${{ inputs.acr_identity_client_id }}"
+      - uses: actions/checkout@v4
 
-      - name: Validar inputs requeridos
-        shell: bash
-        run: |
-          set -euo pipefail
-          [ -n "${{ inputs.azure_client_id }}" ] || { echo "Falta azure_client_id"; exit 1; }
-          [ -n "${{ inputs.azure_tenant_id }}" ] || { echo "Falta azure_tenant_id"; exit 1; }
-          [ -n "${{ inputs.azure_subscription_id }}" ] || { echo "Falta azure_subscription_id"; exit 1; }
-          [ -n "${{ inputs.resource_group }}" ] || { echo "Falta resource_group"; exit 1; }
-          [ -n "${{ inputs.aca_environment }}" ] || { echo "Falta aca_environment"; exit 1; }
-          [ -n "${{ inputs.location }}" ] || { echo "Falta location"; exit 1; }
-          [ -n "${{ inputs.app_name }}" ] || { echo "Falta app_name"; exit 1; }
-          [ -n "${{ inputs.acr_login_server }}" ] || { echo "Falta acr_login_server"; exit 1; }
-          [ -n "${{ inputs.image_repository }}" ] || { echo "Falta image_repository"; exit 1; }
-          [ -n "${{ inputs.commit_sha }}" ] || { echo "Falta commit_sha"; exit 1; }
-
-      - name: Azure Login (OIDC)
+      - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
-          client-id: ${{ inputs.azure_client_id }}
-          tenant-id: ${{ inputs.azure_tenant_id }}
-          subscription-id: ${{ inputs.azure_subscription_id }}
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          environment: azurecloud
+          allow-no-subscriptions: false
+          audience: api://AzureADTokenExchange
 
-      - name: Instalar/actualizar extensión containerapp
+      - name: Meta (image ref / ACR name)
+        id: meta
         shell: bash
         run: |
           set -euo pipefail
-          az version
-          if ! az extension show --name containerapp >/dev/null 2>&1; then
-            az extension add --name containerapp -y
-          else
-            az extension update --name containerapp -y || true
+          REGISTRY="${{ inputs.registry_login_server }}"
+          IMAGE_REPO="${{ inputs.image_repo }}"
+          SHA="${{ inputs.sha }}"
+
+          IMAGE_REF="${REGISTRY}/${IMAGE_REPO}:sha-${SHA}"
+          ACR_NAME="${REGISTRY%%.azurecr.io}"
+
+          {
+            echo "REGISTRY=${REGISTRY}"
+            echo "IMAGE_REF=${IMAGE_REF}"
+            echo "ACR_NAME=${ACR_NAME}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Ensure containerapp extension
+        uses: azure/CLI@v2
+        with:
+          inlineScript: az extension add -n containerapp --upgrade || true
+
+      - name: Preflight (RG / Env / App opcional)
+        shell: bash
+        run: |
+          set -euo pipefail
+          az group show -n "${{ inputs.resource_group }}" -o none
+          az containerapp env show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -o none || \
+          az containerapp env create -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -l "${{ inputs.location }}" -o none
+
+      - name: Ensure MI + AcrPull + Registry binding (si existe el app)
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="${{ inputs.resource_group }}"
+          APP="${{ inputs.aca_be_name }}"
+          ACR_NAME="${{ steps.meta.outputs.ACR_NAME }}"
+          ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
+
+          if az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
+            MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
+            if [[ -z "${MI}" || "${MI}" == "None" ]]; then
+              az containerapp identity assign -g "${RG}" -n "${APP}" --system-assigned -o none
+              MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
+            fi
+
+            HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)"
+            if [[ "${HAS_ROLE}" == "0" ]]; then
+              az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" -o none
+            fi
+
+            az containerapp registry set \
+              -g "${RG}" -n "${APP}" \
+              --server "${{ steps.meta.outputs.REGISTRY }}" \
+              --identity system -o none || true
           fi
 
-      - name: Verificar recursos destino
+      - name: Create/Update BE (ACA)
         env:
+          IMG: ${{ steps.meta.outputs.IMAGE_REF }}
           RG: ${{ inputs.resource_group }}
-          ACA_ENV: ${{ inputs.aca_environment }}
-          APP: ${{ inputs.app_name }}
-          ACR_LOGIN: ${{ inputs.acr_login_server }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          az group show -n "$RG" -o none
-          az containerapp env show -g "$RG" -n "$ACA_ENV" -o none
-          az containerapp show -g "$RG" -n "$APP" -o none
-          if [ -n "${ACR_LOGIN:-}" ]; then
-            ACR_NAME="${ACR_LOGIN%%.*}"
-            az acr show -n "$ACR_NAME" -o none
-          fi
-
-      - name: Configurar ACR en la ACA (pull con MI) — opcional
-        if: ${{ inputs.acr_identity_client_id != '' }}
-        env:
-          RESOURCE_GROUP: ${{ inputs.resource_group }}
-          APP_NAME: ${{ inputs.app_name }}
-          ACR_LOGIN: ${{ inputs.acr_login_server }}
-          ACR_MI_CLIENT_ID: ${{ inputs.acr_identity_client_id }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          az containerapp registry set \
-            -g "$RESOURCE_GROUP" -n "$APP_NAME" \
-            --server "$ACR_LOGIN" \
-            --identity "$ACR_MI_CLIENT_ID"
-
-      - name: Desplegar imagen (az containerapp update)
-        env:
-          RESOURCE_GROUP: ${{ inputs.resource_group }}
-          APP_NAME: ${{ inputs.app_name }}
+          ACA_ENV: ${{ inputs.aca_env }}
+          APP: ${{ inputs.aca_be_name }}
           INGRESS: ${{ inputs.ingress }}
           TARGET_PORT: ${{ inputs.target_port }}
           CPU: ${{ inputs.cpu }}
-          MEMORY: ${{ inputs.memory }}
-          MIN_REPLICAS: ${{ inputs.min_replicas }}
-          MAX_REPLICAS: ${{ inputs.max_replicas }}
-          EXTRA_ENV: ${{ inputs.extra_env }}
+          MEM: ${{ inputs.memory }}
+          MIN: ${{ inputs.min_replicas }}
+          MAX: ${{ inputs.max_replicas }}
+          APP_ENV: ${{ inputs.app_env }}
         shell: bash
         run: |
           set -euo pipefail
-          IMAGE_REF="${{ inputs.acr_login_server }}/${{ inputs.image_repository }}:sha-${{ inputs.commit_sha }}"
-          echo "Deploying image: $IMAGE_REF"
+          # Env típicos de BE; PORT debe coincidir con target-port
+          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
 
-          PARAMS=( -g "$RESOURCE_GROUP" -n "$APP_NAME" --image "$IMAGE_REF" )
-          [ -n "${INGRESS:-}" ]      && PARAMS+=( --ingress "$INGRESS" )
-          [ -n "${TARGET_PORT:-}" ]  && PARAMS+=( --target-port "$TARGET_PORT" )
-          [ -n "${CPU:-}" ]          && PARAMS+=( --cpu "$CPU" )
-          [ -n "${MEMORY:-}" ]       && PARAMS+=( --memory "$MEMORY" )
-          [ -n "${MIN_REPLICAS:-}" ] && PARAMS+=( --min-replicas "$MIN_REPLICAS" )
-          [ -n "${MAX_REPLICAS:-}" ] && PARAMS+=( --max-replicas "$MAX_REPLICAS" )
-
-          if [ -n "${EXTRA_ENV:-}" ]; then
-            while IFS= read -r line; do
-              [ -z "$line" ] && continue
-              PARAMS+=( --set-env-vars "$line" )
-            done <<< "$EXTRA_ENV"
+          if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
+            az containerapp create \
+              -g "${RG}" -n "${APP}" \
+              --environment "${ACA_ENV}" \
+              --image "${IMG}" \
+              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
+              --registry-server "${{ steps.meta.outputs.REGISTRY }}" \
+              --registry-identity system \
+              --system-assigned \
+              --cpu "${CPU}" --memory "${MEM}" \
+              --min-replicas "${MIN}" --max-replicas "${MAX}" \
+              --env-vars "${ENV_VARS}"
+          else
+            az containerapp update \
+              -g "${RG}" -n "${APP}" \
+              --image "${IMG}" \
+              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
+              --cpu "${CPU}" --memory "${MEM}" \
+              --min-replicas "${MIN}" --max-replicas "${MAX}" \
+              --set-env-vars "${ENV_VARS}"
           fi
 
-          az containerapp update "${PARAMS[@]}"
-          echo "✅ Deploy completado."
+      - name: BE internal FQDN (verificación)
+        shell: bash
+        run: |
+          set -euo pipefail
+          az containerapp show \
+            -g "${{ inputs.resource_group }}" \
+            -n "${{ inputs.aca_be_name }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv
