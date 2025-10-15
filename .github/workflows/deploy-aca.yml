@@ -141,7 +141,7 @@ jobs:
               --identity system -o none || true
           fi
 
-      - name: Create/Update BE (ACA)
+      - name: Create/Update BE (ACA)  # <-- HOTFIX aplicado aquí
         env:
           IMG: ${{ steps.meta.outputs.IMAGE_REF }}
           RG: ${{ inputs.resource_group }}
@@ -154,27 +154,29 @@ jobs:
           MIN: ${{ inputs.min_replicas }}
           MAX: ${{ inputs.max_replicas }}
           APP_ENV: ${{ inputs.app_env }}
+          REGISTRY: ${{ steps.meta.outputs.REGISTRY }}
         shell: bash
         run: |
           set -euo pipefail
-          # Env típicos de BE; PORT debe coincidir con TARGET_PORT
+
+          # Env típicos de BE; PORT debe coincidir con target-port
           ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
-            # CREATE: aquí sí aceptan --ingress y --target-port
+            # CREATE: aquí sí podemos pasar ingress/target-port
             az containerapp create \
               -g "${RG}" -n "${APP}" \
               --environment "${ACA_ENV}" \
               --image "${IMG}" \
               --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
-              --registry-server "${{ steps.meta.outputs.REGISTRY }}" \
+              --registry-server "${REGISTRY}" \
               --registry-identity system \
               --system-assigned \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --env-vars "${ENV_VARS}"
           else
-            # UPDATE: no acepta --ingress ni --target-port
+            # UPDATE: NO pasar --ingress/--target-port (rompe en algunas versiones)
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
@@ -182,12 +184,11 @@ jobs:
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --set-env-vars "${ENV_VARS}"
 
-            # Asegurar tipo de ingress y puerto (idempotente)
+            # Asegura tipo/puerto de ingress post-update
             az containerapp ingress enable \
               -g "${RG}" -n "${APP}" \
               --type "${INGRESS}" \
-              --target-port "${TARGET_PORT}" \
-              --transport auto 1>/dev/null
+              --target-port "${TARGET_PORT}"
           fi
 
       - name: BE internal FQDN (verificación)
