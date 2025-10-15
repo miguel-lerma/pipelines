@@ -157,10 +157,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Env típicos de BE; PORT debe coincidir con target-port
+          # Env típicos de BE; PORT debe coincidir con TARGET_PORT
           ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
+            # CREATE: aquí sí aceptan --ingress y --target-port
             az containerapp create \
               -g "${RG}" -n "${APP}" \
               --environment "${ACA_ENV}" \
@@ -173,13 +174,20 @@ jobs:
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --env-vars "${ENV_VARS}"
           else
+            # UPDATE: no acepta --ingress ni --target-port
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
-              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --set-env-vars "${ENV_VARS}"
+
+            # Asegurar tipo de ingress y puerto (idempotente)
+            az containerapp ingress enable \
+              -g "${RG}" -n "${APP}" \
+              --type "${INGRESS}" \
+              --target-port "${TARGET_PORT}" \
+              --transport auto 1>/dev/null
           fi
 
       - name: BE internal FQDN (verificación)
