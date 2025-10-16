@@ -82,7 +82,6 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
           environment: azurecloud
-          allow-no-subscriptions: false
           audience: api://AzureADTokenExchange
 
       - name: Variables comunes (image ref / ACR name)
@@ -131,9 +130,7 @@ jobs:
             exit 1
           fi
 
-          {
-            echo "API_INTERNAL=https://${FQDN}"
-          } >> "$GITHUB_OUTPUT"
+          echo "API_INTERNAL=https://${FQDN}" >> "$GITHUB_OUTPUT"
 
       - name: Ensure MI + AcrPull + Registry binding
         shell: bash
@@ -179,10 +176,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # HOTFIX: exponer MAYÚS/minúsculas para Nginx/envsubst (UNA SOLA LÍNEA)
-          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} API_BASE_URL_INTERNAL=${API_INTERNAL} api_base_url_internal=${API_INTERNAL}"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
+            echo "🔹 Creando nueva app ${APP}..."
             az containerapp create \
               -g "${RG}" -n "${APP}" \
               --environment "${ACA_ENV}" \
@@ -193,15 +189,23 @@ jobs:
               --system-assigned \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
-              --env-vars "${ENV_VARS}"
+              --env-vars \
+                "APP_ENV=${APP_ENV}" \
+                "PORT=${TARGET_PORT}" \
+                "API_BASE_URL_INTERNAL=${API_INTERNAL}" \
+                "api_base_url_internal=${API_INTERNAL}"
           else
-            # UPDATE: sin --ingress ni --target-port
+            echo "🔹 Actualizando app existente ${APP}..."
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
-              --set-env-vars "${ENV_VARS}"
+              --set-env-vars \
+                "APP_ENV=${APP_ENV}" \
+                "PORT=${TARGET_PORT}" \
+                "API_BASE_URL_INTERNAL=${API_INTERNAL}" \
+                "api_base_url_internal=${API_INTERNAL}"
 
             # Asegurar ingress/puerto tras update
             if [[ "${INGRESS}" == "external" ]]; then
