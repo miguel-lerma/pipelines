@@ -182,8 +182,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Variables de entorno que usará Nginx (template) dentro del contenedor
-          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} API_BASE_URL_INTERNAL=${API_INTERNAL}"
+          # HOTFIX: exponer MAYÚS/minúsculas para Nginx/envsubst
+          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} \
+API_BASE_URL_INTERNAL=${API_INTERNAL} \
+api_base_url_internal=${API_INTERNAL}"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
             az containerapp create \
