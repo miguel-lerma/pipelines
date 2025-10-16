@@ -1,5 +1,5 @@
 ---
-name: CD - Deploy Backend to Azure Container Apps (Reusable)
+name: CD - Deploy Frontend to Azure Container Apps (Reusable)
 
 on:
   workflow_call:
@@ -17,6 +17,9 @@ on:
       aca_env:
         required: true
         type: string
+      aca_fe_name:
+        required: true
+        type: string
       aca_be_name:
         required: true
         type: string
@@ -25,19 +28,18 @@ on:
         required: true
         type: string
       image_repo:
-        description: "repo de imagen en ACR, p.ej. archetype-back"
+        description: "nombre del repo de imagen en ACR, p.ej. archetype-front"
         required: true
         type: string
       sha:
-        description: "sha del commit: <40 hex>"
+        description: "sha del commit que taggeó la imagen: sha-<40>"
         required: true
         type: string
       ingress:
-        description: "internal recomendado para BE"
-        default: internal
+        default: external
         type: string
       target_port:
-        default: "8080"
+        default: "80"
         type: string
       cpu:
         default: "0.25"
@@ -46,13 +48,13 @@ on:
         default: "0.5Gi"
         type: string
       min_replicas:
-        default: "1"
+        default: "0"
         type: string
       max_replicas:
         default: "1"
         type: string
       app_env:
-        description: "APP_ENV para BE (dev|qa|production)"
+        description: "APP_ENV para FE (dev|qa|production)"
         required: true
         type: string
 
@@ -61,12 +63,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: cd-be-${{ inputs.environment }}-${{ inputs.sha }}
+  group: cd-fe-${{ inputs.environment }}-${{ inputs.sha }}
   cancel-in-progress: true
 
 jobs:
   deploy:
-    name: Deploy BE → ${{ inputs.environment }}
+    name: Deploy FE → ${{ inputs.environment }}
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
 
@@ -83,7 +85,7 @@ jobs:
           allow-no-subscriptions: false
           audience: api://AzureADTokenExchange
 
-      - name: Meta (image ref / ACR name)
+      - name: Variables comunes (image ref / ACR name)
         id: meta
         shell: bash
         run: |
@@ -93,6 +95,7 @@ jobs:
           SHA="${{ inputs.sha }}"
 
           IMAGE_REF="${REGISTRY}/${IMAGE_REPO}:sha-${SHA}"
+          # Derivar ACR_NAME de login server
           ACR_NAME="${REGISTRY%%.azurecr.io}"
 
           {
@@ -104,9 +107,10 @@ jobs:
       - name: Ensure containerapp extension
         uses: azure/CLI@v2
         with:
-          inlineScript: az extension add -n containerapp --upgrade || true
+          inlineScript: |
+            az extension add -n containerapp --upgrade || true
 
-      - name: Preflight (RG / Env / App opcional)
+      - name: Preflight (RG / Env / FE app opcional)
         shell: bash
         run: |
           set -euo pipefail
@@ -114,13 +118,33 @@ jobs:
           az containerapp env show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -o none || \
           az containerapp env create -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -l "${{ inputs.location }}" -o none
 
-      - name: Ensure MI + AcrPull + Registry binding (si existe el app)
+      - name: Resolver FQDN interno del BE
+        id: be
+        shell: bash
+        run: |
+          set -euo pipefail
+          FQDN="$(az containerapp show \
+            -g "${{ inputs.resource_group }}" \
+            -n "${{ inputs.aca_be_name }}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv || true)"
+
+          if [[ -z "${FQDN}" || "${FQDN}" != *".internal."* ]]; then
+            echo "El backend '${{ inputs.aca_be_name }}' no tiene FQDN interno (ingress=internal). FQDN='${FQDN:-<vacio>}'" >&2
+            exit 1
+          fi
+
+          {
+            echo "API_INTERNAL=https://${FQDN}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Ensure MI + AcrPull + Registry binding
         shell: bash
         run: |
           set -euo pipefail
           RG="${{ inputs.resource_group }}"
-          APP="${{ inputs.aca_be_name }}"
+          APP="${{ inputs.aca_fe_name }}"
           ACR_NAME="${{ steps.meta.outputs.ACR_NAME }}"
+
           ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
 
           if az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
@@ -141,12 +165,12 @@ jobs:
               --identity system -o none || true
           fi
 
-      - name: Create/Update BE (ACA)
+      - name: Create or Update FE (ACA)
         env:
           IMG: ${{ steps.meta.outputs.IMAGE_REF }}
           RG: ${{ inputs.resource_group }}
           ACA_ENV: ${{ inputs.aca_env }}
-          APP: ${{ inputs.aca_be_name }}
+          APP: ${{ inputs.aca_fe_name }}
           INGRESS: ${{ inputs.ingress }}
           TARGET_PORT: ${{ inputs.target_port }}
           CPU: ${{ inputs.cpu }}
@@ -154,14 +178,16 @@ jobs:
           MIN: ${{ inputs.min_replicas }}
           MAX: ${{ inputs.max_replicas }}
           APP_ENV: ${{ inputs.app_env }}
+          API_INTERNAL: ${{ steps.be.outputs.API_INTERNAL }}
         shell: bash
         run: |
           set -euo pipefail
-          # Env típicos de BE; PORT debe coincidir con TARGET_PORT
-          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
+          # HOTFIX: exponer MAYÚS/minúsculas para Nginx/envsubst
+          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} \
+API_BASE_URL_INTERNAL=${API_INTERNAL} \
+api_base_url_internal=${API_INTERNAL}"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
-            # CREATE: aquí sí aceptan --ingress y --target-port
             az containerapp create \
               -g "${RG}" -n "${APP}" \
               --environment "${ACA_ENV}" \
@@ -174,27 +200,20 @@ jobs:
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --env-vars "${ENV_VARS}"
           else
-            # UPDATE: no acepta --ingress ni --target-port
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
+              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --set-env-vars "${ENV_VARS}"
-
-            # Asegurar tipo de ingress y puerto (idempotente)
-            az containerapp ingress enable \
-              -g "${RG}" -n "${APP}" \
-              --type "${INGRESS}" \
-              --target-port "${TARGET_PORT}" \
-              --transport auto 1>/dev/null
           fi
 
-      - name: BE internal FQDN (verificación)
+      - name: FE public URL
         shell: bash
         run: |
           set -euo pipefail
           az containerapp show \
             -g "${{ inputs.resource_group }}" \
-            -n "${{ inputs.aca_be_name }}" \
+            -n "${{ inputs.aca_fe_name }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv
