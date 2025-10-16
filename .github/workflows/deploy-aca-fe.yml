@@ -106,7 +106,8 @@ jobs:
       - name: Ensure containerapp extension
         uses: azure/CLI@v2
         with:
-          inlineScript: az extension add -n containerapp --upgrade || true
+          inlineScript: |
+            az extension add -n containerapp --upgrade || true
 
       - name: Preflight (RG / Env / FE app opcional)
         shell: bash
@@ -195,13 +196,20 @@ jobs:
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --env-vars "${ENV_VARS}"
           else
+            # UPDATE: sin --ingress ni --target-port
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
-              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --set-env-vars "${ENV_VARS}"
+
+            # Asegurar ingress/puerto tras update
+            if [[ "${INGRESS}" == "external" ]]; then
+              az containerapp ingress enable -g "${RG}" -n "${APP}" --type external --target-port "${TARGET_PORT}"
+            else
+              az containerapp ingress enable -g "${RG}" -n "${APP}" --type internal --target-port "${TARGET_PORT}"
+            fi
           fi
 
       - name: FE public URL
