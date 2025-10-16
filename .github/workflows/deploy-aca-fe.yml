@@ -48,7 +48,7 @@ on:
         default: "0.5Gi"
         type: string
       min_replicas:
-        default: "0"
+        default: "1"
         type: string
       max_replicas:
         default: "1"
@@ -93,10 +93,8 @@ jobs:
           REGISTRY="${{ inputs.registry_login_server }}"
           IMAGE_REPO="${{ inputs.image_repo }}"
           SHA="${{ inputs.sha }}"
-
           IMAGE_REF="${REGISTRY}/${IMAGE_REPO}:sha-${SHA}"
           ACR_NAME="${REGISTRY%%.azurecr.io}"
-
           {
             echo "REGISTRY=${REGISTRY}"
             echo "IMAGE_REF=${IMAGE_REF}"
@@ -126,17 +124,15 @@ jobs:
             -g "${{ inputs.resource_group }}" \
             -n "${{ inputs.aca_be_name }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv || true)"
-
           if [[ -z "${FQDN}" || "${FQDN}" != *".internal."* ]]; then
             echo "El backend '${{ inputs.aca_be_name }}' no tiene FQDN interno (ingress=internal). FQDN='${FQDN:-<vacio>}'" >&2
             exit 1
           fi
-
           {
             echo "API_INTERNAL=https://${FQDN}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Ensure MI + AcrPull + Registry binding
+      - name: Ensure MI + AcrPull + Registry binding (si existe el app)
         shell: bash
         run: |
           set -euo pipefail
@@ -144,19 +140,16 @@ jobs:
           APP="${{ inputs.aca_fe_name }}"
           ACR_NAME="${{ steps.meta.outputs.ACR_NAME }}"
           ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
-
           if az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
             MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
             if [[ -z "${MI}" || "${MI}" == "None" ]]; then
               az containerapp identity assign -g "${RG}" -n "${APP}" --system-assigned -o none
               MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
             fi
-
             HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)"
             if [[ "${HAS_ROLE}" == "0" ]]; then
               az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" -o none
             fi
-
             az containerapp registry set \
               -g "${RG}" -n "${APP}" \
               --server "${{ steps.meta.outputs.REGISTRY }}" \
@@ -180,8 +173,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # HOTFIX: exponer MAYÚS/minúsculas para Nginx/envsubst (UNA SOLA LÍNEA)
-          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} API_BASE_URL_INTERNAL=${API_INTERNAL} api_base_url_internal=${API_INTERNAL}"
+          # Una sola variable para Nginx/envsubst
+          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} API_BASE_URL_INTERNAL=${API_INTERNAL}"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
             az containerapp create \
@@ -196,27 +189,55 @@ jobs:
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --env-vars "${ENV_VARS}"
           else
-            # UPDATE: sin --ingress ni --target-port
+            # IMPORTANTE: algunos az CLI viejos fallan si pasas --ingress/--target-port en update
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --set-env-vars "${ENV_VARS}"
-
-            # Asegurar ingress/puerto tras update
-            if [[ "${INGRESS}" == "external" ]]; then
-              az containerapp ingress enable -g "${RG}" -n "${APP}" --type external --target-port "${TARGET_PORT}"
-            else
-              az containerapp ingress enable -g "${RG}" -n "${APP}" --type internal --target-port "${TARGET_PORT}"
-            fi
           fi
 
-      - name: FE public URL
+      - name: FE public URL (output)
+        id: url
         shell: bash
         run: |
           set -euo pipefail
-          az containerapp show \
-            -g "${{ inputs.resource_group }}" \
-            -n "${{ inputs.aca_fe_name }}" \
-            --query "properties.configuration.ingress.fqdn" -o tsv
+          FQDN="$(az containerapp show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_fe_name }}" --query "properties.configuration.ingress.fqdn" -o tsv)"
+          echo "FQDN=${FQDN}" >> "$GITHUB_OUTPUT"
+          echo "FE: https://${FQDN}"
+
+      # --------- SMOKE TESTS ----------
+      - name: Smoke test → FE home (/)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FQDN="${{ steps.url.outputs.FQDN }}"
+          for i in {1..10}; do
+            code="$(curl -fsS -o /dev/null -w "%{http_code}" "https://${FQDN}/" || true)"
+            if [ "$code" = "200" ] || [ "$code" = "304" ]; then
+              echo "Home OK ($code)"
+              exit 0
+            fi
+            echo "Intento $i: aún no está listo (code=$code). Reintentando..."
+            sleep 6
+          done
+          echo "Fallo: / no respondió 200/304" >&2
+          exit 1
+
+      - name: Smoke test → FE proxy a BE (/api/health)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FQDN="${{ steps.url.outputs.FQDN }}"
+          for i in {1..10}; do
+            code="$(curl -fsS -o /dev/null -w "%{http_code}" "https://${FQDN}/api/health" || true)"
+            if [ "$code" = "200" ]; then
+              echo "/api/health OK (200)"
+              exit 0
+            fi
+            echo "Intento $i: /api/health = $code. Reintentando..."
+            sleep 6
+          done
+          echo "Fallo: /api/health no respondió 200" >&2
+          exit 1
