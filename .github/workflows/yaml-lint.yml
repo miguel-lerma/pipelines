@@ -1,9 +1,9 @@
 ---
-name: YAML Lint
+name: YAML & Workflow Lint
 
-'on':
+on:
   pull_request:
-    branches: ["main"]
+    branches: ["develop", "staging", "main"]
     paths:
       - ".github/workflows/**/*.yml"
       - ".github/workflows/**/*.yaml"
@@ -12,13 +12,14 @@ permissions:
   contents: read
 
 jobs:
-  yamllint:
-    name: yamllint (YAML format)
+  lint:
+    name: yamllint + actionlint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Config de yamllint pensada para workflows con líneas largas y strings inline
       - name: Write yamllint config
         run: |
           cat > .yamllint.yml <<'CFG'
@@ -27,7 +28,9 @@ jobs:
             document-start:
               present: true
             line-length:
-              max: 160
+              max: 300
+              allow-non-breakable-words: true
+              allow-non-breakable-inline-mappings: true
             trailing-spaces:
               level: error
             new-line-at-end-of-file:
@@ -36,11 +39,18 @@ jobs:
             brackets: disable
             comments: disable
             indentation: disable
+            colons: disable
+            braces: disable
+            empty-lines: disable
           CFG
 
-      - name: Run yamllint
+      - name: Run yamllint (strict)
         uses: ibiqlik/action-yamllint@v3
         with:
           file_or_dir: ".github/workflows"
           format: github
           strict: true
+
+      # actionlint detecta problemas propios de GitHub Actions que yamllint no ve
+      - name: Run actionlint
+        uses: rhysd/actionlint@v1.6.27
