@@ -1,7 +1,7 @@
 ---
-name: YAML Lint
+name: YAML & Actions Lint
 
-'on':
+on:
   pull_request:
     branches: ["main"]
     paths:
@@ -11,7 +11,22 @@ name: YAML Lint
 permissions:
   contents: read
 
+concurrency:
+  group: yaml-actions-lint-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  actionlint:
+    name: Actionlint (GHA syntax)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Lint de sintaxis de GitHub Actions
+      - name: actionlint
+        uses: rhysd/actionlint@v1.6.27
+
   yamllint:
     name: yamllint (YAML format)
     runs-on: ubuntu-latest
@@ -19,6 +34,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Config de yamllint (suficiente para workflows reusables)
       - name: Write yamllint config
         run: |
           cat > .yamllint.yml <<'CFG'
