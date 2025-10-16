@@ -241,3 +241,4 @@ jobs:
           done
           echo "Fallo: /api/health no respondió 200" >&2
           exit 1
+
