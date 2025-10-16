@@ -208,7 +208,41 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          az containerapp show \
-            -g "${{ inputs.resource_group }}" \
-            -n "${{ inputs.aca_fe_name }}" \
-            --query "properties.configuration.ingress.fqdn" -o tsv
+          FQDN="$(az containerapp show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_fe_name }}" --query "properties.configuration.ingress.fqdn" -o tsv)"
+          echo "FQDN=${FQDN}" >> "$GITHUB_OUTPUT"
+          echo "FE: https://${FQDN}"
+
+      # --------- SMOKE TESTS ----------
+      - name: Smoke test → FE home (/)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FQDN="${{ steps.url.outputs.FQDN }}"
+          for i in {1..10}; do
+            code="$(curl -fsS -o /dev/null -w "%{http_code}" "https://${FQDN}/" || true)"
+            if [ "$code" = "200" ] || [ "$code" = "304" ]; then
+              echo "Home OK ($code)"
+              exit 0
+            fi
+            echo "Intento $i: aún no está listo (code=$code). Reintentando..."
+            sleep 6
+          done
+          echo "Fallo: / no respondió 200/304" >&2
+          exit 1
+
+      - name: Smoke test → FE proxy a BE (/api/health)
+        shell: bash
+        run: |
+          set -euo pipefail
+          FQDN="${{ steps.url.outputs.FQDN }}"
+          for i in {1..10}; do
+            code="$(curl -fsS -o /dev/null -w "%{http_code}" "https://${FQDN}/api/health" || true)"
+            if [ "$code" = "200" ]; then
+              echo "/api/health OK (200)"
+              exit 0
+            fi
+            echo "Intento $i: /api/health = $code. Reintentando..."
+            sleep 6
+          done
+          echo "Fallo: /api/health no respondió 200" >&2
+          exit 1
