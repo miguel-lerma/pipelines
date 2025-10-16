@@ -95,7 +95,6 @@ jobs:
           SHA="${{ inputs.sha }}"
 
           IMAGE_REF="${REGISTRY}/${IMAGE_REPO}:sha-${SHA}"
-          # Derivar ACR_NAME de login server
           ACR_NAME="${REGISTRY%%.azurecr.io}"
 
           {
@@ -107,8 +106,7 @@ jobs:
       - name: Ensure containerapp extension
         uses: azure/CLI@v2
         with:
-          inlineScript: |
-            az extension add -n containerapp --upgrade || true
+          inlineScript: az extension add -n containerapp --upgrade || true
 
       - name: Preflight (RG / Env / FE app opcional)
         shell: bash
@@ -144,7 +142,6 @@ jobs:
           RG="${{ inputs.resource_group }}"
           APP="${{ inputs.aca_fe_name }}"
           ACR_NAME="${{ steps.meta.outputs.ACR_NAME }}"
-
           ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
 
           if az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
@@ -182,10 +179,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # HOTFIX: exponer MAYÚS/minúsculas para Nginx/envsubst
-          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} \
-API_BASE_URL_INTERNAL=${API_INTERNAL} \
-api_base_url_internal=${API_INTERNAL}"
+          # HOTFIX: exponer MAYÚS/minúsculas para Nginx/envsubst (UNA SOLA LÍNEA)
+          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} API_BASE_URL_INTERNAL=${API_INTERNAL} api_base_url_internal=${API_INTERNAL}"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
             az containerapp create \
