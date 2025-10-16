@@ -87,6 +87,7 @@ jobs:
         id: meta
         shell: bash
         run: |
+          # shellcheck disable=SC2034
           set -euo pipefail
           REGISTRY="${{ inputs.registry_login_server }}"
           IMAGE_REPO="${{ inputs.image_repo }}"
@@ -107,6 +108,7 @@ jobs:
       - name: Preflight (RG / Env)
         shell: bash
         run: |
+          # shellcheck disable=SC2034
           set -euo pipefail
           az group show -n "${{ inputs.resource_group }}" -o none
           az containerapp env show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -o none || \
@@ -115,6 +117,7 @@ jobs:
       - name: Ensure MI + AcrPull + Registry binding (si existe el app)
         shell: bash
         run: |
+          # shellcheck disable=SC2034
           set -euo pipefail
           RG="${{ inputs.resource_group }}"
           APP="${{ inputs.aca_be_name }}"
@@ -154,9 +157,10 @@ jobs:
           APP_ENV: ${{ inputs.app_env }}
         shell: bash
         run: |
+          # shellcheck disable=SC2034
           set -euo pipefail
 
-          # IMPORTANTE: en update NO pasar --ingress/--target-port (rompe en algunas versiones de az)
+          # En update NO pasar --ingress/--target-port (hay versiones de az que fallan)
           ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
@@ -183,6 +187,7 @@ jobs:
       - name: BE internal FQDN (verificación)
         shell: bash
         run: |
+          # shellcheck disable=SC2034
           set -euo pipefail
           echo "FQDN interno del BE:"
           az containerapp show \
