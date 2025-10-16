@@ -156,8 +156,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          # IMPORTANTE: en update NO pasar --ingress/--target-port (rompe en algunas versiones de az)
-          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
+          # Construye env vars como lista para pasarlas limpias al CLI
+          IMAGE_TAG="${IMG##*:}"
+          ENV_ARGS=(
+            "APP_ENV=${APP_ENV}"
+            "PORT=${TARGET_PORT}"
+            "NODE_ENV=production"
+            "LOG_LEVEL=info"
+            "IMAGE_TAG=${IMAGE_TAG}"
+          )
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
             az containerapp create \
@@ -170,15 +177,41 @@ jobs:
               --system-assigned \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
-              --env-vars "${ENV_VARS}"
+              --env-vars "${ENV_ARGS[@]}"
           else
+            # UPDATE: sin --ingress/--target-port (algunas versiones de az no lo soportan bien)
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
-              --set-env-vars "${ENV_VARS}"
+              --set-env-vars "${ENV_ARGS[@]}"
+
+            # Asegura ingress/puerto tras update
+            if [[ "${INGRESS}" == "external" ]]; then
+              az containerapp ingress enable -g "${RG}" -n "${APP}" --type external --target-port "${TARGET_PORT}"
+            else
+              az containerapp ingress enable -g "${RG}" -n "${APP}" --type internal --target-port "${TARGET_PORT}"
+            fi
           fi
+
+      - name: Esperar a revisión lista (Ready)
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="${{ inputs.resource_group }}"
+          APP="${{ inputs.aca_be_name }}"
+
+          echo "Esperando a que '${APP}' esté Running..."
+          for i in {1..20}; do
+            status="$(az containerapp show -g "$RG" -n "$APP" --query "properties.runningStatus" -o tsv || true)"
+            [[ "$status" == "Running" ]] && { echo "Running ✅"; break; }
+            sleep 5
+          done
+
+          echo "Última revisión activa:"
+          az containerapp revision list -g "$RG" -n "$APP" \
+            --query "[].{rev:name,image:properties.template.containers[0].image,active:properties.active,created:properties.createdTime}" -o table
 
       - name: BE internal FQDN (verificación)
         shell: bash
