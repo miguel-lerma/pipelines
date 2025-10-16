@@ -25,11 +25,11 @@ on:
         required: true
         type: string
       image_repo:
-        description: "repo en ACR, p.ej. archetype-back"
+        description: "repo de imagen en ACR, p.ej. archetype-back"
         required: true
         type: string
       sha:
-        description: "sha del commit: <40 hex>"
+        description: "sha del commit: <40 hex> (se usa como tag sha-<40>)"
         required: true
         type: string
       ingress:
@@ -104,7 +104,7 @@ jobs:
         with:
           inlineScript: az extension add -n containerapp --upgrade || true
 
-      - name: Preflight (RG / Env / App opcional)
+      - name: Preflight (RG / Env)
         shell: bash
         run: |
           set -euo pipefail
@@ -127,10 +127,12 @@ jobs:
               az containerapp identity assign -g "${RG}" -n "${APP}" --system-assigned -o none
               MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
             fi
+
             HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)"
             if [[ "${HAS_ROLE}" == "0" ]]; then
               az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" -o none
             fi
+
             az containerapp registry set \
               -g "${RG}" -n "${APP}" \
               --server "${{ steps.meta.outputs.REGISTRY }}" \
@@ -153,7 +155,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # UNA SOLA LÍNEA para evitar errores YAML:
+
+          # IMPORTANTE: en update NO pasar --ingress/--target-port (rompe en algunas versiones de az)
           ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
@@ -161,8 +164,7 @@ jobs:
               -g "${RG}" -n "${APP}" \
               --environment "${ACA_ENV}" \
               --image "${IMG}" \
-              --ingress "${INGRESS}" \
-              --target-port "${TARGET_PORT}" \
+              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
               --registry-server "${{ steps.meta.outputs.REGISTRY }}" \
               --registry-identity system \
               --system-assigned \
@@ -173,8 +175,6 @@ jobs:
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
-              --ingress "${INGRESS}" \
-              --target-port "${TARGET_PORT}" \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --set-env-vars "${ENV_VARS}"
@@ -184,6 +184,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "FQDN interno del BE:"
           az containerapp show \
             -g "${{ inputs.resource_group }}" \
             -n "${{ inputs.aca_be_name }}" \
