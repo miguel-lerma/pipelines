@@ -113,7 +113,8 @@ jobs:
           set -euo pipefail
           az group show -n "${{ inputs.resource_group }}" -o none
           az containerapp env show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -o none || \
-          az containerapp env create -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -l "${{ inputs.location }}" -o none
+          az containerapp env create -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" \
+            -l "${{ inputs.location }}" -o none
 
       - name: Resolver FQDN interno del BE
         id: be
@@ -126,7 +127,7 @@ jobs:
             --query "properties.configuration.ingress.fqdn" -o tsv || true)"
 
           if [[ -z "${FQDN}" || "${FQDN}" != *".internal."* ]]; then
-            echo "El backend '${{ inputs.aca_be_name }}' no tiene FQDN interno (ingress=internal). FQDN='${FQDN:-<vacio>}'" >&2
+            echo "El backend '${{ inputs.aca_be_name }}' no tiene FQDN interno (ingress=internal)." >&2
             exit 1
           fi
 
@@ -152,9 +153,11 @@ jobs:
             MI="$(az containerapp show -g "$RG" -n "$APP" --query "identity.principalId" -o tsv)"
           fi
 
-          HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)"
+          HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" \
+            --scope "${ACR_ID}" --query "length(@)" -o tsv)"
           if [[ "${HAS_ROLE}" == "0" ]]; then
-            az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" -o none
+            az role assignment create --assignee "${MI}" --role "AcrPull" \
+              --scope "${ACR_ID}" -o none
           fi
 
           az containerapp registry set -g "$RG" -n "$APP" \
@@ -221,9 +224,11 @@ jobs:
             ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
 
             if [[ "${INGRESS}" == "external" ]]; then
-              az containerapp ingress enable -g "${RG}" -n "${APP}" --type external --target-port "${TARGET_PORT}" -o none
+              az containerapp ingress enable -g "${RG}" -n "${APP}" \
+                --type external --target-port "${TARGET_PORT}" -o none
             else
-              az containerapp ingress enable -g "${RG}" -n "${APP}" --type internal --target-port "${TARGET_PORT}" -o none
+              az containerapp ingress enable -g "${RG}" -n "${APP}" \
+                --type internal --target-port "${TARGET_PORT}" -o none
             fi
           fi
 
@@ -238,7 +243,8 @@ jobs:
           az containerapp revision list -g "${RG}" -n "${APP}" \
             --query "[?properties.active==\`true\`].name" -o tsv >/dev/null
 
-          FE_FQDN="$(az containerapp show -g "${RG}" -n "${APP}" --query "properties.configuration.ingress.fqdn" -o tsv)"
+          FE_FQDN="$(az containerapp show -g "${RG}" -n "${APP}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)"
 
           echo "🌐 FE URL: https://${FE_FQDN}"
           curl -sS -I "https://${FE_FQDN}/" | sed -n '1,8p' || true
@@ -248,11 +254,12 @@ jobs:
 
           echo "🔁 Proxy /api/healthz"
           curl -sS -D - -o /dev/null "https://${FE_FQDN}/api/healthz" \
-          | awk 'BEGIN{IGNORECASE=1}/^HTTP\//||/^x-proxied-by:/||/^x-upstream-addr:/||/^x-upstream-status:/||/^x-debug-api-base:/||/^x-debug-api-host:/'
+            | grep -Ei '^(HTTP/|x-proxied-by|x-upstream-addr|x-upstream-status|x-debug-api-base|x-debug-api-host)'
 
       - name: FE public URL
         shell: bash
         run: |
           set -euo pipefail
-          az containerapp show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_fe_name }}" \
+          az containerapp show -g "${{ inputs.resource_group }}" \
+            -n "${{ inputs.aca_fe_name }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv
