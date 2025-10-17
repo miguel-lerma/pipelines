@@ -113,7 +113,8 @@ jobs:
           set -euo pipefail
           az group show -n "${{ inputs.resource_group }}" -o none
           az containerapp env show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -o none || \
-          az containerapp env create -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -l "${{ inputs.location }}" -o none
+          az containerapp env create -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" \
+            -l "${{ inputs.location }}" -o none
 
       - name: Resolver FQDN interno del BE
         id: be
@@ -126,7 +127,7 @@ jobs:
             --query "properties.configuration.ingress.fqdn" -o tsv || true)"
 
           if [[ -z "${FQDN}" || "${FQDN}" != *".internal."* ]]; then
-            echo "El backend '${{ inputs.aca_be_name }}' no tiene FQDN interno (ingress=internal). FQDN='${FQDN:-<vacio>}'" >&2
+            echo "El backend '${{ inputs.aca_be_name }}' no tiene FQDN interno (ingress=internal)." >&2
             exit 1
           fi
 
@@ -253,14 +254,12 @@ jobs:
 
           echo "🔁 Proxy /api/healthz"
           curl -sS -D - -o /dev/null "https://${FE_FQDN}/api/healthz" \
-            | awk 'BEGIN{IGNORECASE=1} \
-/^HTTP\// || /^x-proxied-by:/ || \
-/^x-upstream-addr:/ || /^x-upstream-status:/ || \
-/^x-debug-api-base:/ || /^x-debug-api-host:/'
+            | grep -Ei '^(HTTP/|x-proxied-by|x-upstream-addr|x-upstream-status|x-debug-api-base|x-debug-api-host)'
 
       - name: FE public URL
         shell: bash
         run: |
           set -euo pipefail
-          az containerapp show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_fe_name }}" \
+          az containerapp show -g "${{ inputs.resource_group }}" \
+            -n "${{ inputs.aca_fe_name }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv
