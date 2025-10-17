@@ -107,7 +107,7 @@ jobs:
         with:
           inlineScript: az extension add -n containerapp --upgrade || true
 
-      - name: Preflight (RG / Env / FE app opcional)
+      - name: Preflight (RG / Env)
         shell: bash
         run: |
           set -euo pipefail
@@ -132,32 +132,38 @@ jobs:
 
           echo "API_INTERNAL=https://${FQDN}" >> "$GITHUB_OUTPUT"
 
-      - name: Ensure MI + AcrPull + Registry binding
+      # NEW: función shell para asegurar AcrPull (la usamos en create/update)
+      - name: Helpers (AcrPull)
+        id: helpers
         shell: bash
         run: |
+          cat > ensure_acrpull.sh << 'EOS'
+          #!/usr/bin/env bash
           set -euo pipefail
-          RG="${{ inputs.resource_group }}"
-          APP="${{ inputs.aca_fe_name }}"
-          ACR_NAME="${{ steps.meta.outputs.ACR_NAME }}"
-          ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
+          RG="$1"; APP="$2"; ACR_ID="$3"; REG_SERVER="$4"
 
-          if az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
-            MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
-            if [[ -z "${MI}" || "${MI}" == "None" ]]; then
-              az containerapp identity assign -g "${RG}" -n "${APP}" --system-assigned -o none
-              MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
-            fi
-
-            HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)"
-            if [[ "${HAS_ROLE}" == "0" ]]; then
-              az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" -o none
-            fi
-
-            az containerapp registry set \
-              -g "${RG}" -n "${APP}" \
-              --server "${{ steps.meta.outputs.REGISTRY }}" \
-              --identity system -o none || true
+          # Asegurar identidad del app + rol AcrPull + binding de registry
+          if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
+            echo "App $APP no existe aún (no se puede asignar rol)."
+            exit 0
           fi
+
+          MI="$(az containerapp show -g "$RG" -n "$APP" --query "identity.principalId" -o tsv)"
+          if [[ -z "${MI}" || "${MI}" == "None" ]]; then
+            az containerapp identity assign -g "$RG" -n "$APP" --system-assigned -o none
+            MI="$(az containerapp show -g "$RG" -n "$APP" --query "identity.principalId" -o tsv)"
+          fi
+
+          HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)"
+          if [[ "${HAS_ROLE}" == "0" ]]; then
+            az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" -o none
+          fi
+
+          az containerapp registry set -g "$RG" -n "$APP" \
+            --server "$REG_SERVER" \
+            --identity system -o none || true
+          EOS
+          chmod +x ensure_acrpull.sh
 
       - name: Create or Update FE (ACA)
         env:
@@ -173,9 +179,12 @@ jobs:
           MAX: ${{ inputs.max_replicas }}
           APP_ENV: ${{ inputs.app_env }}
           API_INTERNAL: ${{ steps.be.outputs.API_INTERNAL }}
+          ACR_NAME: ${{ steps.meta.outputs.ACR_NAME }}
+          REG_SERVER: ${{ steps.meta.outputs.REGISTRY }}
         shell: bash
         run: |
           set -euo pipefail
+          ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
             echo "🔹 Creando nueva app ${APP}..."
@@ -184,7 +193,7 @@ jobs:
               --environment "${ACA_ENV}" \
               --image "${IMG}" \
               --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
-              --registry-server "${{ steps.meta.outputs.REGISTRY }}" \
+              --registry-server "${REG_SERVER}" \
               --registry-identity system \
               --system-assigned \
               --cpu "${CPU}" --memory "${MEM}" \
@@ -193,7 +202,11 @@ jobs:
                 "APP_ENV=${APP_ENV}" \
                 "PORT=${TARGET_PORT}" \
                 "API_BASE_URL_INTERNAL=${API_INTERNAL}" \
-                "api_base_url_internal=${API_INTERNAL}"
+                "api_base_url_internal=${API_INTERNAL}" \
+                "ROLL=$(date +%s)"
+
+            # NEW: asegurar AcrPull + binding inmediatamente tras crear
+            ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
           else
             echo "🔹 Actualizando app existente ${APP}..."
             az containerapp update \
@@ -205,15 +218,44 @@ jobs:
                 "APP_ENV=${APP_ENV}" \
                 "PORT=${TARGET_PORT}" \
                 "API_BASE_URL_INTERNAL=${API_INTERNAL}" \
-                "api_base_url_internal=${API_INTERNAL}"
+                "api_base_url_internal=${API_INTERNAL}" \
+                "ROLL=$(date +%s)"
+
+            # NEW: asegurar AcrPull + binding también en updates
+            ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
 
             # Asegurar ingress/puerto tras update
             if [[ "${INGRESS}" == "external" ]]; then
-              az containerapp ingress enable -g "${RG}" -n "${APP}" --type external --target-port "${TARGET_PORT}"
+              az containerapp ingress enable -g "${RG}" -n "${APP}" --type external --target-port "${TARGET_PORT}" -o none
             else
-              az containerapp ingress enable -g "${RG}" -n "${APP}" --type internal --target-port "${TARGET_PORT}"
+              az containerapp ingress enable -g "${RG}" -n "${APP}" --type internal --target-port "${TARGET_PORT}" -o none
             fi
           fi
+
+      # NEW: Esperar a que la revisión esté lista y validar endpoints básicos
+      - name: Post-Deploy: esperar y validar
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG="${{ inputs.resource_group }}"
+          APP="${{ inputs.aca_fe_name }}"
+
+          echo "⏳ Esperando revisión lista..."
+          az containerapp revision list -g "${RG}" -n "${APP}" \
+            --query "[?properties.active==\`true\`].name" -o tsv >/dev/null
+
+          FE_FQDN="$(az containerapp show -g "${RG}" -n "${APP}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)"
+
+          echo "🌐 FE URL: https://${FE_FQDN}"
+          curl -sS -I "https://${FE_FQDN}/" | sed -n '1,8p' || true
+
+          echo "💚 Health FE"
+          curl -sS -i "https://${FE_FQDN}/health" | sed -n '1,10p' || true
+
+          echo "🔁 Proxy /api/healthz"
+          curl -sS -D - -o /dev/null "https://${FE_FQDN}/api/healthz" \
+          | awk 'BEGIN{IGNORECASE=1}/^HTTP\//||/^x-proxied-by:/||/^x-upstream-addr:/||/^x-upstream-status:/||/^x-debug-api-base:/||/^x-debug-api-host:/'
 
       - name: FE public URL
         shell: bash
