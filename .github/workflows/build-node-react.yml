@@ -28,25 +28,25 @@ jobs:
         run: |
           set -euo pipefail
           APP_DIR="${{ inputs.app_dir }}"
+          manager="npm"
+          has_lock="false"
+          lock_path=""
+
           if [ -f "$APP_DIR/package-lock.json" ]; then
-            echo "manager=npm" >> "$GITHUB_OUTPUT"
-            echo "has_lock=true" >> "$GITHUB_OUTPUT"
-            echo "lock_path=$APP_DIR/package-lock.json" >> "$GITHUB_OUTPUT"
+            manager="npm";  has_lock="true"; lock_path="$APP_DIR/package-lock.json"
           elif [ -f "$APP_DIR/pnpm-lock.yaml" ]; then
-            echo "manager=pnpm" >> "$GITHUB_OUTPUT"
-            echo "has_lock=true" >> "$GITHUB_OUTPUT"
-            echo "lock_path=$APP_DIR/pnpm-lock.yaml" >> "$GITHUB_OUTPUT"
+            manager="pnpm"; has_lock="true"; lock_path="$APP_DIR/pnpm-lock.yaml"
           elif [ -f "$APP_DIR/yarn.lock" ]; then
-            echo "manager=yarn" >> "$GITHUB_OUTPUT"
-            echo "has_lock=true" >> "$GITHUB_OUTPUT"
-            echo "lock_path=$APP_DIR/yarn.lock" >> "$GITHUB_OUTPUT"
-          else
-            echo "manager=npm" >> "$GITHUB_OUTPUT"
-            echo "has_lock=false" >> "$GITHUB_OUTPUT"
-            echo "lock_path=" >> "$GITHUB_OUTPUT"
+            manager="yarn"; has_lock="true"; lock_path="$APP_DIR/yarn.lock"
           fi
 
-      # Con cache solo si hay lockfile
+          {
+            echo "manager=$manager"
+            echo "has_lock=$has_lock"
+            echo "lock_path=$lock_path"
+          } >> "$GITHUB_OUTPUT"
+
+      # Con cache solo si hay lockfile de npm
       - name: Setup Node (con cache)
         if: steps.lock.outputs.has_lock == 'true' && steps.lock.outputs.manager == 'npm'
         uses: actions/setup-node@v4
