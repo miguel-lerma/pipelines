@@ -185,11 +185,12 @@ jobs:
           ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
-            echo "🔹 Creando nueva app ${APP}..."
+            echo "🆕 Creando nueva app ${APP}..."
             az containerapp create \
               -g "${RG}" -n "${APP}" \
               --environment "${ACA_ENV}" \
               --image "${IMG}" \
+              --revision-suffix "sha-${{ inputs.sha }}" \
               --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
               --registry-server "${REG_SERVER}" \
               --registry-identity system \
@@ -205,10 +206,11 @@ jobs:
 
             ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
           else
-            echo "🔹 Actualizando app existente ${APP}..."
+            echo "🔄 Actualizando app existente ${APP}..."
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
+              --revision-suffix "sha-${{ inputs.sha }}" \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --set-env-vars \
@@ -226,6 +228,32 @@ jobs:
               az containerapp ingress enable -g "${RG}" -n "${APP}" --type internal --target-port "${TARGET_PORT}" -o none
             fi
           fi
+
+      - name: Post-Deploy: forzar modo Single y tráfico a la última revisión
+        shell: bash
+        env:
+          RG: ${{ inputs.resource_group }}
+          APP: ${{ inputs.aca_fe_name }}
+        run: |
+          set -euo pipefail
+          echo "🔧 Asegurando modo Single y tráfico a la última revisión..."
+          az containerapp revision set-mode -g "${RG}" -n "${APP}" --mode Single
+          az containerapp update -g "${RG}" -n "${APP}" --traffic-weight latest=100
+
+      - name: Post-Deploy (limpieza): desactivar quickstart si existe
+        shell: bash
+        env:
+          RG: ${{ inputs.resource_group }}
+          APP: ${{ inputs.aca_fe_name }}
+        run: |
+          set -euo pipefail
+          echo "🧹 Buscando revisiones 'quickstart' residuales..."
+          mapfile -t QS < <(az containerapp revision list -g "${RG}" -n "${APP}" \
+            --query "[?properties.template.containers[0].image=='mcr.microsoft.com/k8se/quickstart:latest'].name" -o tsv || true)
+          for rev in "${QS[@]}"; do
+            echo "⛔ Desactivando revision quickstart: ${rev}"
+            az containerapp revision deactivate -g "${RG}" -n "${APP}" --revision "${rev}" || true
+          done
 
       - name: "Post-Deploy: esperar y validar"
         shell: bash
