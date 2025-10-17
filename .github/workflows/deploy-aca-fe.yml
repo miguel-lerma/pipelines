@@ -73,8 +73,7 @@ jobs:
     environment: ${{ inputs.environment }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -153,9 +152,11 @@ jobs:
             MI="$(az containerapp show -g "$RG" -n "$APP" --query "identity.principalId" -o tsv)"
           fi
 
-          HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)"
+          HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" \
+            --scope "${ACR_ID}" --query "length(@)" -o tsv)"
           if [[ "${HAS_ROLE}" == "0" ]]; then
-            az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" -o none
+            az role assignment create --assignee "${MI}" --role "AcrPull" \
+              --scope "${ACR_ID}" -o none
           fi
 
           az containerapp registry set -g "$RG" -n "$APP" \
@@ -186,7 +187,7 @@ jobs:
           ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
-            echo "Creando nueva app ${APP}..."
+            echo "🔹 Creando nueva app ${APP}..."
             az containerapp create \
               -g "${RG}" -n "${APP}" \
               --environment "${ACA_ENV}" \
@@ -206,7 +207,7 @@ jobs:
 
             ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
           else
-            echo "Actualizando app existente ${APP}..."
+            echo "🔹 Actualizando app existente ${APP}..."
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
@@ -222,34 +223,40 @@ jobs:
             ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
 
             if [[ "${INGRESS}" == "external" ]]; then
-              az containerapp ingress enable -g "${RG}" -n "${APP}" --type external --target-port "${TARGET_PORT}" -o none
+              az containerapp ingress enable -g "${RG}" -n "${APP}" \
+                --type external --target-port "${TARGET_PORT}" -o none
             else
-              az containerapp ingress enable -g "${RG}" -n "${APP}" --type internal --target-port "${TARGET_PORT}" -o none
+              az containerapp ingress enable -g "${RG}" -n "${APP}" \
+                --type internal --target-port "${TARGET_PORT}" -o none
             fi
           fi
 
-      - name: Post-Deploy (esperar y validar)
+      - name: "Post-Deploy: esperar y validar"
         shell: bash
         run: |
           set -euo pipefail
           RG="${{ inputs.resource_group }}"
           APP="${{ inputs.aca_fe_name }}"
 
-          # Espera a que exista al menos una revisión activa
+          echo "⏳ Esperando revisión lista..."
           az containerapp revision list -g "${RG}" -n "${APP}" \
             --query "[?properties.active==\`true\`].name" -o tsv >/dev/null
 
-          FE_FQDN="$(az containerapp show -g "${RG}" -n "${APP}" --query "properties.configuration.ingress.fqdn" -o tsv)"
+          FE_FQDN="$(az containerapp show -g "${RG}" -n "${APP}" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)"
 
-          echo "FE URL: https://${FE_FQDN}"
+          echo "🌐 FE URL: https://${FE_FQDN}"
           curl -sS -I "https://${FE_FQDN}/" | sed -n '1,8p' || true
 
-          echo "Health FE"
+          echo "💚 Health FE"
           curl -sS -i "https://${FE_FQDN}/health" | sed -n '1,10p' || true
 
-          echo "Proxy /api/healthz"
+          echo "🔁 Proxy /api/healthz"
           curl -sS -D - -o /dev/null "https://${FE_FQDN}/api/healthz" \
-          | awk 'BEGIN{IGNORECASE=1} /^HTTP\// || /^x-proxied-by:/ || /^x-upstream-addr:/ || /^x-upstream-status:/ || /^x-debug-api-base:/ || /^x-debug-api-host:/'
+            | awk 'BEGIN{IGNORECASE=1} \
+/^HTTP\// || /^x-proxied-by:/ || \
+/^x-upstream-addr:/ || /^x-upstream-status:/ || \
+/^x-debug-api-base:/ || /^x-debug-api-host:/'
 
       - name: FE public URL
         shell: bash
