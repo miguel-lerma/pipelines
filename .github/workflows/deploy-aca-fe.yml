@@ -132,7 +132,6 @@ jobs:
 
           echo "API_INTERNAL=https://${FQDN}" >> "$GITHUB_OUTPUT"
 
-      # NEW: función shell para asegurar AcrPull (la usamos en create/update)
       - name: Helpers (AcrPull)
         id: helpers
         shell: bash
@@ -142,7 +141,6 @@ jobs:
           set -euo pipefail
           RG="$1"; APP="$2"; ACR_ID="$3"; REG_SERVER="$4"
 
-          # Asegurar identidad del app + rol AcrPull + binding de registry
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
             echo "App $APP no existe aún (no se puede asignar rol)."
             exit 0
@@ -205,7 +203,6 @@ jobs:
                 "api_base_url_internal=${API_INTERNAL}" \
                 "ROLL=$(date +%s)"
 
-            # NEW: asegurar AcrPull + binding inmediatamente tras crear
             ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
           else
             echo "🔹 Actualizando app existente ${APP}..."
@@ -221,10 +218,8 @@ jobs:
                 "api_base_url_internal=${API_INTERNAL}" \
                 "ROLL=$(date +%s)"
 
-            # NEW: asegurar AcrPull + binding también en updates
             ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
 
-            # Asegurar ingress/puerto tras update
             if [[ "${INGRESS}" == "external" ]]; then
               az containerapp ingress enable -g "${RG}" -n "${APP}" --type external --target-port "${TARGET_PORT}" -o none
             else
@@ -232,8 +227,7 @@ jobs:
             fi
           fi
 
-      # NEW: Esperar a que la revisión esté lista y validar endpoints básicos
-      - name: Post-Deploy: esperar y validar
+      - name: "Post-Deploy: esperar y validar"
         shell: bash
         run: |
           set -euo pipefail
@@ -244,8 +238,7 @@ jobs:
           az containerapp revision list -g "${RG}" -n "${APP}" \
             --query "[?properties.active==\`true\`].name" -o tsv >/dev/null
 
-          FE_FQDN="$(az containerapp show -g "${RG}" -n "${APP}" \
-            --query "properties.configuration.ingress.fqdn" -o tsv)"
+          FE_FQDN="$(az containerapp show -g "${RG}" -n "${APP}" --query "properties.configuration.ingress.fqdn" -o tsv)"
 
           echo "🌐 FE URL: https://${FE_FQDN}"
           curl -sS -I "https://${FE_FQDN}/" | sed -n '1,8p' || true
@@ -261,7 +254,5 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          az containerapp show \
-            -g "${{ inputs.resource_group }}" \
-            -n "${{ inputs.aca_fe_name }}" \
+          az containerapp show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_fe_name }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv
