@@ -73,7 +73,8 @@ jobs:
     environment: ${{ inputs.environment }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Azure login (OIDC)
         uses: azure/login@v2
@@ -185,12 +186,11 @@ jobs:
           ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
 
           if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
-            echo "🆕 Creando nueva app ${APP}..."
+            echo "Creando nueva app ${APP}..."
             az containerapp create \
               -g "${RG}" -n "${APP}" \
               --environment "${ACA_ENV}" \
               --image "${IMG}" \
-              --revision-suffix "sha-${{ inputs.sha }}" \
               --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
               --registry-server "${REG_SERVER}" \
               --registry-identity system \
@@ -206,11 +206,10 @@ jobs:
 
             ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
           else
-            echo "🔄 Actualizando app existente ${APP}..."
+            echo "Actualizando app existente ${APP}..."
             az containerapp update \
               -g "${RG}" -n "${APP}" \
               --image "${IMG}" \
-              --revision-suffix "sha-${{ inputs.sha }}" \
               --cpu "${CPU}" --memory "${MEM}" \
               --min-replicas "${MIN}" --max-replicas "${MAX}" \
               --set-env-vars \
@@ -229,54 +228,28 @@ jobs:
             fi
           fi
 
-      - name: Post-Deploy: forzar modo Single y tráfico a la última revisión
-        shell: bash
-        env:
-          RG: ${{ inputs.resource_group }}
-          APP: ${{ inputs.aca_fe_name }}
-        run: |
-          set -euo pipefail
-          echo "🔧 Asegurando modo Single y tráfico a la última revisión..."
-          az containerapp revision set-mode -g "${RG}" -n "${APP}" --mode Single
-          az containerapp update -g "${RG}" -n "${APP}" --traffic-weight latest=100
-
-      - name: Post-Deploy (limpieza): desactivar quickstart si existe
-        shell: bash
-        env:
-          RG: ${{ inputs.resource_group }}
-          APP: ${{ inputs.aca_fe_name }}
-        run: |
-          set -euo pipefail
-          echo "🧹 Buscando revisiones 'quickstart' residuales..."
-          mapfile -t QS < <(az containerapp revision list -g "${RG}" -n "${APP}" \
-            --query "[?properties.template.containers[0].image=='mcr.microsoft.com/k8se/quickstart:latest'].name" -o tsv || true)
-          for rev in "${QS[@]}"; do
-            echo "⛔ Desactivando revision quickstart: ${rev}"
-            az containerapp revision deactivate -g "${RG}" -n "${APP}" --revision "${rev}" || true
-          done
-
-      - name: "Post-Deploy: esperar y validar"
+      - name: Post-Deploy (esperar y validar)
         shell: bash
         run: |
           set -euo pipefail
           RG="${{ inputs.resource_group }}"
           APP="${{ inputs.aca_fe_name }}"
 
-          echo "⏳ Esperando revisión lista..."
+          # Espera a que exista al menos una revisión activa
           az containerapp revision list -g "${RG}" -n "${APP}" \
             --query "[?properties.active==\`true\`].name" -o tsv >/dev/null
 
           FE_FQDN="$(az containerapp show -g "${RG}" -n "${APP}" --query "properties.configuration.ingress.fqdn" -o tsv)"
 
-          echo "🌐 FE URL: https://${FE_FQDN}"
+          echo "FE URL: https://${FE_FQDN}"
           curl -sS -I "https://${FE_FQDN}/" | sed -n '1,8p' || true
 
-          echo "💚 Health FE"
+          echo "Health FE"
           curl -sS -i "https://${FE_FQDN}/health" | sed -n '1,10p' || true
 
-          echo "🔁 Proxy /api/healthz"
+          echo "Proxy /api/healthz"
           curl -sS -D - -o /dev/null "https://${FE_FQDN}/api/healthz" \
-          | awk 'BEGIN{IGNORECASE=1}/^HTTP\//||/^x-proxied-by:/||/^x-upstream-addr:/||/^x-upstream-status:/||/^x-debug-api-base:/||/^x-debug-api-host:/'
+          | awk 'BEGIN{IGNORECASE=1} /^HTTP\// || /^x-proxied-by:/ || /^x-upstream-addr:/ || /^x-upstream-status:/ || /^x-debug-api-base:/ || /^x-debug-api-host:/'
 
       - name: FE public URL
         shell: bash
