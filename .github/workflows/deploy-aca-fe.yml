@@ -92,10 +92,8 @@ jobs:
           REGISTRY="${{ inputs.registry_login_server }}"
           IMAGE_REPO="${{ inputs.image_repo }}"
           SHA="${{ inputs.sha }}"
-
           IMAGE_REF="${REGISTRY}/${IMAGE_REPO}:sha-${SHA}"
           ACR_NAME="${REGISTRY%%.azurecr.io}"
-
           {
             echo "REGISTRY=${REGISTRY}"
             echo "IMAGE_REF=${IMAGE_REF}"
@@ -113,7 +111,8 @@ jobs:
           set -euo pipefail
           az group show -n "${{ inputs.resource_group }}" -o none
           az containerapp env show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -o none || \
-          az containerapp env create -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -l "${{ inputs.location }}" -o none
+          az containerapp env create -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" \
+            -l "${{ inputs.location }}" -o none
 
       - name: Resolver FQDN interno del BE
         id: be
@@ -125,8 +124,8 @@ jobs:
             -n "${{ inputs.aca_be_name }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv || true)"
 
-          if [[ -z "${FQDN}" || "${FQDN}" != *".internal."* ]]; then
-            echo "El backend '${{ inputs.aca_be_name }}' no tiene FQDN interno (ingress=internal). FQDN='${FQDN:-<vacio>}'" >&2
+          if [[ -z "$FQDN" || "$FQDN" != *".internal."* ]]; then
+            echo "El backend '${{ inputs.aca_be_name }}' no tiene FQDN interno (ingress=internal)." >&2
             exit 1
           fi
 
@@ -147,14 +146,16 @@ jobs:
           fi
 
           MI="$(az containerapp show -g "$RG" -n "$APP" --query "identity.principalId" -o tsv)"
-          if [[ -z "${MI}" || "${MI}" == "None" ]]; then
+          if [[ -z "$MI" || "$MI" == "None" ]]; then
             az containerapp identity assign -g "$RG" -n "$APP" --system-assigned -o none
             MI="$(az containerapp show -g "$RG" -n "$APP" --query "identity.principalId" -o tsv)"
           fi
 
-          HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)"
-          if [[ "${HAS_ROLE}" == "0" ]]; then
-            az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" -o none
+          HAS_ROLE="$(az role assignment list --assignee "$MI" --role "AcrPull" \
+            --scope "$ACR_ID" --query "length(@)" -o tsv)"
+          if [[ "$HAS_ROLE" == "0" ]]; then
+            az role assignment create --assignee "$MI" --role "AcrPull" \
+              --scope "$ACR_ID" -o none
           fi
 
           az containerapp registry set -g "$RG" -n "$APP" \
@@ -182,20 +183,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
+          ACR_ID="$(az acr show -n "$ACR_NAME" -g "$RG" --query id -o tsv)"
 
-          if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
+          if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
             echo "🔹 Creando nueva app ${APP}..."
             az containerapp create \
-              -g "${RG}" -n "${APP}" \
-              --environment "${ACA_ENV}" \
-              --image "${IMG}" \
-              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
-              --registry-server "${REG_SERVER}" \
+              -g "$RG" -n "$APP" \
+              --environment "$ACA_ENV" \
+              --image "$IMG" \
+              --ingress "$INGRESS" --target-port "$TARGET_PORT" \
+              --registry-server "$REG_SERVER" \
               --registry-identity system \
               --system-assigned \
-              --cpu "${CPU}" --memory "${MEM}" \
-              --min-replicas "${MIN}" --max-replicas "${MAX}" \
+              --cpu "$CPU" --memory "$MEM" \
+              --min-replicas "$MIN" --max-replicas "$MAX" \
               --env-vars \
                 "APP_ENV=${APP_ENV}" \
                 "PORT=${TARGET_PORT}" \
@@ -203,14 +204,14 @@ jobs:
                 "api_base_url_internal=${API_INTERNAL}" \
                 "ROLL=$(date +%s)"
 
-            ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
+            ./ensure_acrpull.sh "$RG" "$APP" "$ACR_ID" "$REG_SERVER"
           else
             echo "🔹 Actualizando app existente ${APP}..."
             az containerapp update \
-              -g "${RG}" -n "${APP}" \
-              --image "${IMG}" \
-              --cpu "${CPU}" --memory "${MEM}" \
-              --min-replicas "${MIN}" --max-replicas "${MAX}" \
+              -g "$RG" -n "$APP" \
+              --image "$IMG" \
+              --cpu "$CPU" --memory "$MEM" \
+              --min-replicas "$MIN" --max-replicas "$MAX" \
               --set-env-vars \
                 "APP_ENV=${APP_ENV}" \
                 "PORT=${TARGET_PORT}" \
@@ -218,12 +219,14 @@ jobs:
                 "api_base_url_internal=${API_INTERNAL}" \
                 "ROLL=$(date +%s)"
 
-            ./ensure_acrpull.sh "${RG}" "${APP}" "${ACR_ID}" "${REG_SERVER}"
+            ./ensure_acrpull.sh "$RG" "$APP" "$ACR_ID" "$REG_SERVER"
 
-            if [[ "${INGRESS}" == "external" ]]; then
-              az containerapp ingress enable -g "${RG}" -n "${APP}" --type external --target-port "${TARGET_PORT}" -o none
+            if [[ "$INGRESS" == "external" ]]; then
+              az containerapp ingress enable -g "$RG" -n "$APP" \
+                --type external --target-port "$TARGET_PORT" -o none
             else
-              az containerapp ingress enable -g "${RG}" -n "${APP}" --type internal --target-port "${TARGET_PORT}" -o none
+              az containerapp ingress enable -g "$RG" -n "$APP" \
+                --type internal --target-port "$TARGET_PORT" -o none
             fi
           fi
 
@@ -235,10 +238,11 @@ jobs:
           APP="${{ inputs.aca_fe_name }}"
 
           echo "⏳ Esperando revisión lista..."
-          az containerapp revision list -g "${RG}" -n "${APP}" \
+          az containerapp revision list -g "$RG" -n "$APP" \
             --query "[?properties.active==\`true\`].name" -o tsv >/dev/null
 
-          FE_FQDN="$(az containerapp show -g "${RG}" -n "${APP}" --query "properties.configuration.ingress.fqdn" -o tsv)"
+          FE_FQDN="$(az containerapp show -g "$RG" -n "$APP" \
+            --query "properties.configuration.ingress.fqdn" -o tsv)"
 
           echo "🌐 FE URL: https://${FE_FQDN}"
           curl -sS -I "https://${FE_FQDN}/" | sed -n '1,8p' || true
@@ -248,11 +252,84 @@ jobs:
 
           echo "🔁 Proxy /api/healthz"
           curl -sS -D - -o /dev/null "https://${FE_FQDN}/api/healthz" \
-          | awk 'BEGIN{IGNORECASE=1}/^HTTP\//||/^x-proxied-by:/||/^x-upstream-addr:/||/^x-upstream-status:/||/^x-debug-api-base:/||/^x-debug-api-host:/'
+            | grep -Ei '^(HTTP/|x-proxied-by|x-upstream-addr|x-upstream-status|x-debug-api-base|x-debug-api-host)' || true
 
       - name: FE public URL
         shell: bash
         run: |
           set -euo pipefail
-          az containerapp show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_fe_name }}" \
+          az containerapp show -g "${{ inputs.resource_group }}" \
+            -n "${{ inputs.aca_fe_name }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv
+
+      # === Sanity-check con soft-fail en DEV; hard-fail en QA/PRD ===
+      - name: "Post-Deploy Sanity (config + health)"
+        shell: bash
+        env:
+          RG: ${{ inputs.resource_group }}
+          APP: ${{ inputs.aca_fe_name }}
+          EXP_CPU: ${{ inputs.cpu }}
+          EXP_MEM: ${{ inputs.memory }}
+          EXP_MIN: ${{ inputs.min_replicas }}
+          EXP_MAX: ${{ inputs.max_replicas }}
+          EXP_PORT: ${{ inputs.target_port }}
+          EXP_INGRESS: ${{ inputs.ingress }}    # external|internal
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$ENVIRONMENT" == "dev" ]]; then SOFT_FAIL=1; else SOFT_FAIL=0; fi
+          fail_or_warn() {
+            if [[ "$SOFT_FAIL" -eq 1 ]]; then
+              echo "::warning::$1"
+            else
+              echo "$1"
+              exit 1
+            fi
+          }
+          assert_eq() {
+            local exp="$1" act="$2" label="$3"
+            if [[ "$exp" != "$act" ]]; then
+              fail_or_warn "Mismatch $label: expected '$exp', got '$act'"
+            fi
+          }
+
+          cpu="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.cpu" -o tsv)"
+          mem="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.memory" -o tsv)"
+          min="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.minReplicas" -o tsv)"
+          max="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.maxReplicas" -o tsv)"
+          port="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.targetPort" -o tsv)"
+          ext="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.external" -o tsv)"
+          rev="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.activeRevisionsMode" -o tsv)"
+          fqdn="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.fqdn" -o tsv)"
+          api_url="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='API_BASE_URL_INTERNAL'].value" -o tsv)"
+
+          if [[ "$EXP_INGRESS" == "external" ]]; then exp_ingress_bool="true"; else exp_ingress_bool="false"; fi
+
+          {
+            echo "### FE $APP – Config efectiva"
+            echo "- CPU: $cpu"
+            echo "- Mem: $mem"
+            echo "- Min/Max: $min/$max"
+            echo "- Ingress externo: $ext (esperado: $exp_ingress_bool)"
+            echo "- Target port: $port (esperado: $EXP_PORT)"
+            echo "- Revision mode: $rev"
+            echo "- FQDN: https://$fqdn"
+            echo "- API_BASE_URL_INTERNAL: $api_url"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          assert_eq "$EXP_CPU" "$cpu" "CPU"
+          assert_eq "$EXP_MEM" "$mem" "memory"
+          assert_eq "$EXP_MIN" "$min" "min replicas"
+          assert_eq "$EXP_MAX" "$max" "max replicas"
+          assert_eq "$EXP_PORT" "$port" "target port"
+          assert_eq "$exp_ingress_bool" "$ext" "ingress external/internal"
+
+          if ! curl -sSf "https://$fqdn/health" >/dev/null; then
+            fail_or_warn "Health check /health failed"
+          fi
+          if ! curl -sSf "https://$fqdn/api/healthz" >/dev/null; then
+            fail_or_warn "Health check /api/healthz failed"
+          fi
+
+          echo "✅ FE sanity OK (soft-fail=$SOFT_FAIL)"
