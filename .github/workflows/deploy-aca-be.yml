@@ -155,7 +155,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
 
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
@@ -224,8 +223,15 @@ jobs:
 
           cpu="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.cpu" -o tsv)"
           mem="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.memory" -o tsv)"
-          min="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.minReplicas" -o tsv)"
-          max="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.maxReplicas" -o tsv)"
+          # min/max con fallback por payloads antiguos
+          min="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.scale.minReplicas" -o tsv || true)"
+          max="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.scale.maxReplicas" -o tsv || true)"
+          if [[ -z "$min" ]]; then
+            min="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.minReplicas" -o tsv || true)"
+          fi
+          if [[ -z "$max" ]]; then
+            max="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.maxReplicas" -o tsv || true)"
+          fi
           port="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.targetPort" -o tsv)"
           ext="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.external" -o tsv)"
           rev="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.activeRevisionsMode" -o tsv)"
