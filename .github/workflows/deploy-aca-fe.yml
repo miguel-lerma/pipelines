@@ -254,7 +254,7 @@ jobs:
 
           echo "🔁 Proxy /api/healthz"
           curl -sS -D - -o /dev/null "https://${FE_FQDN}/api/healthz" \
-            | grep -Ei '^(HTTP/|x-proxied-by|x-upstream-addr|x-upstream-status|x-debug-api-base|x-debug-api-host)'
+            | grep -Ei '^(HTTP/|x-proxied-by|x-upstream-addr|x-upstream-status|x-debug-api-base|x-debug-api-host)' || true
 
       - name: FE public URL
         shell: bash
@@ -263,3 +263,75 @@ jobs:
           az containerapp show -g "${{ inputs.resource_group }}" \
             -n "${{ inputs.aca_fe_name }}" \
             --query "properties.configuration.ingress.fqdn" -o tsv
+
+      # === Sanity-check con soft-fail en DEV; hard-fail en QA/PRD ===
+      - name: "Post-Deploy Sanity (config + health)"
+        shell: bash
+        env:
+          RG: ${{ inputs.resource_group }}
+          APP: ${{ inputs.aca_fe_name }}
+          EXP_CPU: ${{ inputs.cpu }}
+          EXP_MEM: ${{ inputs.memory }}
+          EXP_MIN: ${{ inputs.min_replicas }}
+          EXP_MAX: ${{ inputs.max_replicas }}
+          EXP_PORT: ${{ inputs.target_port }}
+          EXP_INGRESS: ${{ inputs.ingress }}    # external|internal
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+
+          # Soft-fail solo en dev
+          if [[ "$ENVIRONMENT" == "dev" ]]; then SOFT_FAIL=1; else SOFT_FAIL=0; fi
+          fail_or_warn() {
+            if [[ "$SOFT_FAIL" -eq 1 ]]; then
+              echo "::warning::$1"
+            else
+              echo "$1"
+              exit 1
+            fi
+          }
+          assert_eq() {
+            local exp="$1" act="$2" label="$3"
+            if [[ "$exp" != "$act" ]]; then
+              fail_or_warn "Mismatch $label: expected '$exp', got '$act'"
+            fi
+          }
+
+          cpu=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.cpu" -o tsv)
+          mem=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.memory" -o tsv)
+          min=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.minReplicas" -o tsv)
+          max=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.maxReplicas" -o tsv)
+          port=$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.targetPort" -o tsv)
+          ext=$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.external" -o tsv)
+          rev=$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.activeRevisionsMode" -o tsv)
+          fqdn=$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.fqdn" -o tsv)
+          api_url=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='API_BASE_URL_INTERNAL'].value" -o tsv)
+
+          if [[ "$EXP_INGRESS" == "external" ]]; then exp_ingress_bool="true"; else exp_ingress_bool="false"; fi
+
+          echo "### FE $APP – Config efectiva" >> $GITHUB_STEP_SUMMARY
+          echo "- CPU: $cpu" >> $GITHUB_STEP_SUMMARY
+          echo "- Mem: $mem" >> $GITHUB_STEP_SUMMARY
+          echo "- Min/Max: $min/$max" >> $GITHUB_STEP_SUMMARY
+          echo "- Ingress externo: $ext (esperado: $exp_ingress_bool)" >> $GITHUB_STEP_SUMMARY
+          echo "- Target port: $port (esperado: $EXP_PORT)" >> $GITHUB_STEP_SUMMARY
+          echo "- Revision mode: $rev" >> $GITHUB_STEP_SUMMARY
+          echo "- FQDN: https://$fqdn" >> $GITHUB_STEP_SUMMARY
+          echo "- API_BASE_URL_INTERNAL: $api_url" >> $GITHUB_STEP_SUMMARY
+
+          assert_eq "$EXP_CPU" "$cpu" "CPU"
+          assert_eq "$EXP_MEM" "$mem" "memory"
+          assert_eq "$EXP_MIN" "$min" "min replicas"
+          assert_eq "$EXP_MAX" "$max" "max replicas"
+          assert_eq "$EXP_PORT" "$port" "target port"
+          assert_eq "$exp_ingress_bool" "$ext" "ingress external/internal"
+
+          # Health externos del FE con soft/hard fail
+          if ! curl -sSf "https://$fqdn/health" >/dev/null; then
+            fail_or_warn "Health check /health failed"
+          fi
+          if ! curl -sSf "https://$fqdn/api/healthz" >/dev/null; then
+            fail_or_warn "Health check /api/healthz failed"
+          fi
+
+          echo "✅ FE sanity OK (soft-fail=$SOFT_FAIL)" >> $GITHUB_STEP_SUMMARY
