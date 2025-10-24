@@ -87,7 +87,6 @@ jobs:
         id: meta
         shell: bash
         run: |
-          # shellcheck disable=SC2034
           set -euo pipefail
           REGISTRY="${{ inputs.registry_login_server }}"
           IMAGE_REPO="${{ inputs.image_repo }}"
@@ -108,7 +107,6 @@ jobs:
       - name: Preflight (RG / Env)
         shell: bash
         run: |
-          # shellcheck disable=SC2034
           set -euo pipefail
           az group show -n "${{ inputs.resource_group }}" -o none
           az containerapp env show -g "${{ inputs.resource_group }}" -n "${{ inputs.aca_env }}" -o none || \
@@ -117,27 +115,26 @@ jobs:
       - name: Ensure MI + AcrPull + Registry binding (si existe el app)
         shell: bash
         run: |
-          # shellcheck disable=SC2034
           set -euo pipefail
           RG="${{ inputs.resource_group }}"
           APP="${{ inputs.aca_be_name }}"
           ACR_NAME="${{ steps.meta.outputs.ACR_NAME }}"
-          ACR_ID="$(az acr show -n "${ACR_NAME}" -g "${RG}" --query id -o tsv)"
+          ACR_ID="$(az acr show -n "$ACR_NAME" -g "$RG" --query id -o tsv)"
 
-          if az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
-            MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
-            if [[ -z "${MI}" || "${MI}" == "None" ]]; then
-              az containerapp identity assign -g "${RG}" -n "${APP}" --system-assigned -o none
-              MI="$(az containerapp show -g "${RG}" -n "${APP}" --query "identity.principalId" -o tsv)"
+          if az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
+            MI="$(az containerapp show -g "$RG" -n "$APP" --query "identity.principalId" -o tsv)"
+            if [[ -z "$MI" || "$MI" == "None" ]]; then
+              az containerapp identity assign -g "$RG" -n "$APP" --system-assigned -o none
+              MI="$(az containerapp show -g "$RG" -n "$APP" --query "identity.principalId" -o tsv)"
             fi
 
-            HAS_ROLE="$(az role assignment list --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" --query "length(@)" -o tsv)"
-            if [[ "${HAS_ROLE}" == "0" ]]; then
-              az role assignment create --assignee "${MI}" --role "AcrPull" --scope "${ACR_ID}" -o none
+            HAS_ROLE="$(az role assignment list --assignee "$MI" --role "AcrPull" --scope "$ACR_ID" --query "length(@)" -o tsv)"
+            if [[ "$HAS_ROLE" == "0" ]]; then
+              az role assignment create --assignee "$MI" --role "AcrPull" --scope "$ACR_ID" -o none
             fi
 
             az containerapp registry set \
-              -g "${RG}" -n "${APP}" \
+              -g "$RG" -n "$APP" \
               --server "${{ steps.meta.outputs.REGISTRY }}" \
               --identity system -o none || true
           fi
@@ -157,37 +154,34 @@ jobs:
           APP_ENV: ${{ inputs.app_env }}
         shell: bash
         run: |
-          # shellcheck disable=SC2034
           set -euo pipefail
 
-          # En update NO pasar --ingress/--target-port (hay versiones de az que fallan)
           ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
 
-          if ! az containerapp show -g "${RG}" -n "${APP}" >/dev/null 2>&1; then
+          if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
             az containerapp create \
-              -g "${RG}" -n "${APP}" \
-              --environment "${ACA_ENV}" \
-              --image "${IMG}" \
-              --ingress "${INGRESS}" --target-port "${TARGET_PORT}" \
+              -g "$RG" -n "$APP" \
+              --environment "$ACA_ENV" \
+              --image "$IMG" \
+              --ingress "$INGRESS" --target-port "$TARGET_PORT" \
               --registry-server "${{ steps.meta.outputs.REGISTRY }}" \
               --registry-identity system \
               --system-assigned \
-              --cpu "${CPU}" --memory "${MEM}" \
-              --min-replicas "${MIN}" --max-replicas "${MAX}" \
-              --env-vars "${ENV_VARS}"
+              --cpu "$CPU" --memory "$MEM" \
+              --min-replicas "$MIN" --max-replicas "$MAX" \
+              --env-vars "$ENV_VARS"
           else
             az containerapp update \
-              -g "${RG}" -n "${APP}" \
-              --image "${IMG}" \
-              --cpu "${CPU}" --memory "${MEM}" \
-              --min-replicas "${MIN}" --max-replicas "${MAX}" \
-              --set-env-vars "${ENV_VARS}"
+              -g "$RG" -n "$APP" \
+              --image "$IMG" \
+              --cpu "$CPU" --memory "$MEM" \
+              --min-replicas "$MIN" --max-replicas "$MAX" \
+              --set-env-vars "$ENV_VARS"
           fi
 
       - name: BE internal FQDN (verificación)
         shell: bash
         run: |
-          # shellcheck disable=SC2034
           set -euo pipefail
           echo "FQDN interno del BE:"
           az containerapp show \
@@ -212,7 +206,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Soft-fail solo en dev
           if [[ "$ENVIRONMENT" == "dev" ]]; then SOFT_FAIL=1; else SOFT_FAIL=0; fi
           fail_or_warn() {
             if [[ "$SOFT_FAIL" -eq 1 ]]; then
@@ -229,27 +222,29 @@ jobs:
             fi
           }
 
-          cpu=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.cpu" -o tsv)
-          mem=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.memory" -o tsv)
-          min=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.minReplicas" -o tsv)
-          max=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.maxReplicas" -o tsv)
-          port=$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.targetPort" -o tsv)
-          ext=$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.external" -o tsv)
-          rev=$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.activeRevisionsMode" -o tsv)
-          app_env=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='APP_ENV'].value" -o tsv)
-          port_env=$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='PORT'].value" -o tsv)
+          cpu="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.cpu" -o tsv)"
+          mem="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].resources.memory" -o tsv)"
+          min="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.minReplicas" -o tsv)"
+          max="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.maxReplicas" -o tsv)"
+          port="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.targetPort" -o tsv)"
+          ext="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.ingress.external" -o tsv)"
+          rev="$(az containerapp show -g "$RG" -n "$APP" --query "properties.configuration.activeRevisionsMode" -o tsv)"
+          app_env="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='APP_ENV'].value" -o tsv)"
+          port_env="$(az containerapp show -g "$RG" -n "$APP" --query "properties.template.containers[0].env[?name=='PORT'].value" -o tsv)"
 
           if [[ "$EXP_INGRESS" == "external" ]]; then exp_ingress_bool="true"; else exp_ingress_bool="false"; fi
 
-          echo "### BE $APP – Config efectiva" >> $GITHUB_STEP_SUMMARY
-          echo "- CPU: $cpu" >> $GITHUB_STEP_SUMMARY
-          echo "- Mem: $mem" >> $GITHUB_STEP_SUMMARY
-          echo "- Min/Max: $min/$max" >> $GITHUB_STEP_SUMMARY
-          echo "- Ingress externo: $ext (esperado: $exp_ingress_bool)" >> $GITHUB_STEP_SUMMARY
-          echo "- Target port: $port (esperado: $EXP_PORT)" >> $GITHUB_STEP_SUMMARY
-          echo "- Revision mode: $rev" >> $GITHUB_STEP_SUMMARY
-          echo "- APP_ENV env: $app_env (esperado: $EXP_APP_ENV)" >> $GITHUB_STEP_SUMMARY
-          echo "- PORT env: $port_env (esperado: $EXP_PORT)" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "### BE $APP – Config efectiva"
+            echo "- CPU: $cpu"
+            echo "- Mem: $mem"
+            echo "- Min/Max: $min/$max"
+            echo "- Ingress externo: $ext (esperado: $exp_ingress_bool)"
+            echo "- Target port: $port (esperado: $EXP_PORT)"
+            echo "- Revision mode: $rev"
+            echo "- APP_ENV env: $app_env (esperado: $EXP_APP_ENV)"
+            echo "- PORT env: $port_env (esperado: $EXP_PORT)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           assert_eq "$EXP_CPU" "$cpu" "CPU"
           assert_eq "$EXP_MEM" "$mem" "memory"
@@ -260,4 +255,4 @@ jobs:
           assert_eq "$EXP_APP_ENV" "$app_env" "APP_ENV"
           assert_eq "$EXP_PORT" "$port_env" "PORT env"
 
-          echo "✅ BE sanity OK (soft-fail=$SOFT_FAIL)" >> $GITHUB_STEP_SUMMARY
+          echo "✅ BE sanity OK (soft-fail=$SOFT_FAIL)"
