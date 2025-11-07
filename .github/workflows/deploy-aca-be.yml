@@ -56,7 +56,7 @@ on:
         required: true
         type: string
 
-      # ========== 🆕 Key Vault Integration (OPCIONAL) ==========
+      # ========== Key Vault Integration (OPCIONAL) ==========
       enable_kv:
         description: "Enable Key Vault secret injection"
         type: boolean
@@ -166,7 +166,7 @@ jobs:
               --identity system -o none || true
           fi
 
-      # ========== 🆕 NUEVO STEP: Key Vault Integration ==========
+      # ========== NUEVO STEP: Key Vault Integration ==========
       - name: Configure Key Vault Secrets
         if: ${{ inputs.enable_kv == true }}
         shell: bash
@@ -183,13 +183,15 @@ jobs:
           # Validaciones básicas
           if [[ -z "$KV_NAME" ]]; then
             echo "⚠️ enable_kv=true pero kv_name está vacío, skipping KV setup"
-            echo "SECRET_ENV_ARGS=" >> "$GITHUB_ENV"
+            echo "KV_SECRETS_ARGS=" >> "$GITHUB_ENV"
+            echo "SECRET_ENV_REFS=" >> "$GITHUB_ENV"
             exit 0
           fi
 
           if [[ -z "$KV_SECRET_REFS" ]]; then
             echo "ℹ️ No hay secretos para inyectar (kv_secret_refs vacío)"
-            echo "SECRET_ENV_ARGS=" >> "$GITHUB_ENV"
+            echo "KV_SECRETS_ARGS=" >> "$GITHUB_ENV"
+            echo "SECRET_ENV_REFS=" >> "$GITHUB_ENV"
             exit 0
           fi
 
@@ -200,10 +202,11 @@ jobs:
 
           echo "🔐 Configurando Key Vault: $KV_NAME"
 
-          # 1. Verificar si el app existe (si no existe, se crea después)
+          # 1. Verificar si el app existe
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
             echo "ℹ️ App '$APP' no existe aún, se configurará KV después del create"
-            echo "SECRET_ENV_ARGS=" >> "$GITHUB_ENV"
+            echo "KV_SECRETS_ARGS=" >> "$GITHUB_ENV"
+            echo "SECRET_ENV_REFS=" >> "$GITHUB_ENV"
             exit 0
           fi
 
@@ -222,7 +225,7 @@ jobs:
 
           echo "✅ Managed Identity: $MI"
 
-          # 3. Verificar y asignar rol "Key Vault Secrets User"
+          # 3. Verificar rol Key Vault Secrets User
           echo "Verificando permisos sobre Key Vault..."
           KV_ID=$(az keyvault show -n "$KV_NAME" -g "$KV_RG" --query id -o tsv)
 
@@ -230,27 +233,31 @@ jobs:
             --assignee "$MI" \
             --role "Key Vault Secrets User" \
             --scope "$KV_ID" \
-            --query "length(@)" -o tsv)
+            --query "length(@)" -o tsv 2>/dev/null || echo "0")
 
           if [[ "$HAS_ROLE" == "0" ]]; then
-            echo "Asignando rol 'Key Vault Secrets User'..."
-            az role assignment create \
-              --assignee "$MI" \
-              --role "Key Vault Secrets User" \
-              --scope "$KV_ID" \
-              -o none
-            sleep 3
-            echo "✅ Rol asignado correctamente"
+            echo "⚠️ Managed Identity no tiene rol 'Key Vault Secrets User'"
+            echo "Por favor, asigna manualmente el rol:"
+            echo "  az role assignment create --role 'Key Vault Secrets User' \\"
+            echo "    --assignee-object-id $MI --assignee-principal-type ServicePrincipal \\"
+            echo "    --scope $KV_ID"
+            if [[ "$KV_REQUIRED" == "true" ]]; then
+              exit 1
+            else
+              echo "KV_SECRETS_ARGS=" >> "$GITHUB_ENV"
+              echo "SECRET_ENV_REFS=" >> "$GITHUB_ENV"
+              exit 0
+            fi
           else
             echo "✅ Rol ya existe"
           fi
 
-          # 4. Parsear secret refs y validar existencia
+          # 4. Construir secretos de KV y env vars
           echo "Procesando secretos..."
-          SECRET_ENV_ARGS=""
+          KV_SECRETS_ARGS=""
+          SECRET_ENV_REFS=""
 
           for pair in $KV_SECRET_REFS; do
-            # Validar formato (debe tener "=")
             if [[ ! "$pair" =~ ^[A-Z_]+=[a-z0-9-]+$ ]]; then
               echo "⚠️ Formato inválido: '$pair' (ignorando)"
               continue
@@ -266,7 +273,12 @@ jobs:
               --query "id" -o tsv >/dev/null 2>&1; then
 
               echo "  ✅ $ENV_VAR → secretref:$SECRET_NAME"
-              SECRET_ENV_ARGS="${SECRET_ENV_ARGS} ${ENV_VAR}=secretref:${SECRET_NAME}"
+
+              # Construir argumentos para az containerapp secret set
+              KV_SECRETS_ARGS="${KV_SECRETS_ARGS} ${SECRET_NAME}=keyvaultref:https://${KV_NAME}.vault.azure.net/secrets/${SECRET_NAME},identityref:system"
+
+              # Construir env vars que referencian los secretos
+              SECRET_ENV_REFS="${SECRET_ENV_REFS} ${ENV_VAR}=secretref:${SECRET_NAME}"
             else
               MSG="Secret '$SECRET_NAME' no existe en Key Vault '$KV_NAME'"
 
@@ -274,14 +286,48 @@ jobs:
                 echo "  ❌ ERROR: $MSG"
                 exit 1
               else
-                echo "  ⚠️ WARNING: $MSG (soft-fail en modo dev)"
+                echo "  ⚠️ WARNING: $MSG (soft-fail)"
               fi
             fi
           done
 
-          # Guardar para usar en el siguiente step
-          echo "SECRET_ENV_ARGS=${SECRET_ENV_ARGS}" >> "$GITHUB_ENV"
+          # Guardar para usar en siguiente step
+          {
+            echo "KV_SECRETS_ARGS<<EOF"
+            echo "$KV_SECRETS_ARGS"
+            echo "EOF"
+            echo "SECRET_ENV_REFS<<EOF"
+            echo "$SECRET_ENV_REFS"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
           echo "✅ Key Vault configurado correctamente"
+
+      - name: Register KV Secrets in Container App
+        if: ${{ inputs.enable_kv == true }}
+        shell: bash
+        env:
+          RG: ${{ inputs.resource_group }}
+          APP: ${{ inputs.aca_be_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${KV_SECRETS_ARGS:-}" ]]; then
+            echo "ℹ️ No hay secretos de KV para registrar"
+            exit 0
+          fi
+
+          if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
+            echo "ℹ️ App no existe aún, se registrarán secretos después del create"
+            exit 0
+          fi
+
+          echo "📦 Registrando secretos de Key Vault en Container App..."
+
+          # Registrar secretos (az containerapp secret set)
+          eval "az containerapp secret set -g \"$RG\" -n \"$APP\" --secrets $KV_SECRETS_ARGS"
+
+          echo "✅ Secretos registrados"
 
       - name: Create/Update BE (ACA)
         env:
@@ -300,17 +346,24 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Env vars básicas (siempre presentes)
-          ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
+          # Construir env vars básicas como array
+          ENV_VARS_ARRAY=(
+            "APP_ENV=${APP_ENV}"
+            "PORT=${TARGET_PORT}"
+            "NODE_ENV=production"
+            "LOG_LEVEL=info"
+          )
 
-          # 🔐 Incluir secretos de KV si existen
-          if [[ -n "${SECRET_ENV_ARGS:-}" ]]; then
-            ENV_VARS="${ENV_VARS} ${SECRET_ENV_ARGS}"
-            SECRET_COUNT=$(echo "${SECRET_ENV_ARGS}" | wc -w)
-            echo "📦 Incluyendo ${SECRET_COUNT} secretos de Key Vault"
+          # Agregar secret refs de KV si existen
+          if [[ -n "${SECRET_ENV_REFS:-}" ]]; then
+            echo "📦 Agregando secretos de Key Vault..."
+            for ref in $SECRET_ENV_REFS; do
+              ENV_VARS_ARRAY+=("$ref")
+            done
           fi
 
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
+            echo "🆕 Creando Container App..."
             az containerapp create \
               -g "$RG" -n "$APP" \
               --environment "$ACA_ENV" \
@@ -321,14 +374,15 @@ jobs:
               --system-assigned \
               --cpu "$CPU" --memory "$MEM" \
               --min-replicas "$MIN" --max-replicas "$MAX" \
-              --env-vars "$ENV_VARS"
+              --env-vars "${ENV_VARS_ARRAY[@]}"
           else
+            echo "🔄 Actualizando Container App..."
             az containerapp update \
               -g "$RG" -n "$APP" \
               --image "$IMG" \
               --cpu "$CPU" --memory "$MEM" \
               --min-replicas "$MIN" --max-replicas "$MAX" \
-              --set-env-vars "$ENV_VARS"
+              --set-env-vars "${ENV_VARS_ARRAY[@]}"
           fi
 
       - name: BE internal FQDN (verificación)
