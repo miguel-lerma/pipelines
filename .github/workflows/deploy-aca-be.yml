@@ -292,13 +292,14 @@ jobs:
           done
 
           # Guardar para usar en siguiente step
-          echo "KV_SECRETS_ARGS<<EOF" >> "$GITHUB_ENV"
-          echo "$KV_SECRETS_ARGS" >> "$GITHUB_ENV"
-          echo "EOF" >> "$GITHUB_ENV"
-
-          echo "SECRET_ENV_REFS<<EOF" >> "$GITHUB_ENV"
-          echo "$SECRET_ENV_REFS" >> "$GITHUB_ENV"
-          echo "EOF" >> "$GITHUB_ENV"
+          {
+            echo "KV_SECRETS_ARGS<<EOF"
+            echo "$KV_SECRETS_ARGS"
+            echo "EOF"
+            echo "SECRET_ENV_REFS<<EOF"
+            echo "$SECRET_ENV_REFS"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
 
           echo "✅ Key Vault configurado correctamente"
 
