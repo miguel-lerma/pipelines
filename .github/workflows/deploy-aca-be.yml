@@ -55,7 +55,7 @@ on:
         description: "APP_ENV para BE (dev|qa|production)"
         required: true
         type: string
-      
+
       # ========== 🆕 Key Vault Integration (OPCIONAL) ==========
       enable_kv:
         description: "Enable Key Vault secret injection"
@@ -179,39 +179,39 @@ jobs:
           APP: ${{ inputs.aca_be_name }}
         run: |
           set -euo pipefail
-          
+
           # Validaciones básicas
           if [[ -z "$KV_NAME" ]]; then
             echo "⚠️ enable_kv=true pero kv_name está vacío, skipping KV setup"
             echo "SECRET_ENV_ARGS=" >> "$GITHUB_ENV"
             exit 0
           fi
-          
+
           if [[ -z "$KV_SECRET_REFS" ]]; then
             echo "ℹ️ No hay secretos para inyectar (kv_secret_refs vacío)"
             echo "SECRET_ENV_ARGS=" >> "$GITHUB_ENV"
             exit 0
           fi
-          
+
           # Usar mismo RG si no se especifica otro
           if [[ -z "$KV_RG" ]]; then
             KV_RG="$RG"
           fi
-          
+
           echo "🔐 Configurando Key Vault: $KV_NAME"
-          
+
           # 1. Verificar si el app existe (si no existe, se crea después)
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
             echo "ℹ️ App '$APP' no existe aún, se configurará KV después del create"
             echo "SECRET_ENV_ARGS=" >> "$GITHUB_ENV"
             exit 0
           fi
-          
+
           # 2. Asegurar Managed Identity
           echo "Verificando Managed Identity..."
           MI=$(az containerapp show -g "$RG" -n "$APP" \
             --query "identity.principalId" -o tsv 2>/dev/null || echo "")
-          
+
           if [[ -z "$MI" || "$MI" == "None" ]]; then
             echo "Asignando System-Assigned Managed Identity..."
             az containerapp identity assign -g "$RG" -n "$APP" --system-assigned -o none
@@ -219,19 +219,19 @@ jobs:
             MI=$(az containerapp show -g "$RG" -n "$APP" \
               --query "identity.principalId" -o tsv)
           fi
-          
+
           echo "✅ Managed Identity: $MI"
-          
+
           # 3. Verificar y asignar rol "Key Vault Secrets User"
           echo "Verificando permisos sobre Key Vault..."
           KV_ID=$(az keyvault show -n "$KV_NAME" -g "$KV_RG" --query id -o tsv)
-          
+
           HAS_ROLE=$(az role assignment list \
             --assignee "$MI" \
             --role "Key Vault Secrets User" \
             --scope "$KV_ID" \
             --query "length(@)" -o tsv)
-          
+
           if [[ "$HAS_ROLE" == "0" ]]; then
             echo "Asignando rol 'Key Vault Secrets User'..."
             az role assignment create \
@@ -244,32 +244,32 @@ jobs:
           else
             echo "✅ Rol ya existe"
           fi
-          
+
           # 4. Parsear secret refs y validar existencia
           echo "Procesando secretos..."
           SECRET_ENV_ARGS=""
-          
+
           for pair in $KV_SECRET_REFS; do
             # Validar formato (debe tener "=")
             if [[ ! "$pair" =~ ^[A-Z_]+=[a-z0-9-]+$ ]]; then
               echo "⚠️ Formato inválido: '$pair' (ignorando)"
               continue
             fi
-            
+
             ENV_VAR="${pair%%=*}"
             SECRET_NAME="${pair##*=}"
-            
+
             # Verificar que el secreto existe en Key Vault
             if az keyvault secret show \
               --vault-name "$KV_NAME" \
               --name "$SECRET_NAME" \
               --query "id" -o tsv >/dev/null 2>&1; then
-              
+
               echo "  ✅ $ENV_VAR → secretref:$SECRET_NAME"
               SECRET_ENV_ARGS="${SECRET_ENV_ARGS} ${ENV_VAR}=secretref:${SECRET_NAME}"
             else
               MSG="Secret '$SECRET_NAME' no existe en Key Vault '$KV_NAME'"
-              
+
               if [[ "$KV_REQUIRED" == "true" ]]; then
                 echo "  ❌ ERROR: $MSG"
                 exit 1
@@ -278,7 +278,7 @@ jobs:
               fi
             fi
           done
-          
+
           # Guardar para usar en el siguiente step
           echo "SECRET_ENV_ARGS=${SECRET_ENV_ARGS}" >> "$GITHUB_ENV"
           echo "✅ Key Vault configurado correctamente"
@@ -299,10 +299,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          
+
           # Env vars básicas (siempre presentes)
           ENV_VARS="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
-          
+
           # 🔐 Incluir secretos de KV si existen
           if [[ -n "${SECRET_ENV_ARGS:-}" ]]; then
             ENV_VARS="${ENV_VARS} ${SECRET_ENV_ARGS}"
