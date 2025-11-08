@@ -346,20 +346,15 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Construir env vars básicas como array
-          ENV_VARS_ARRAY=(
-            "APP_ENV=${APP_ENV}"
-            "PORT=${TARGET_PORT}"
-            "NODE_ENV=production"
-            "LOG_LEVEL=info"
-          )
+          # Construir comando de env vars
+          ENV_VARS_CMD="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
 
           # Agregar secret refs de KV si existen
           if [[ -n "${SECRET_ENV_REFS:-}" ]]; then
-            echo "📦 Agregando secretos de Key Vault..."
-            for ref in $SECRET_ENV_REFS; do
-              ENV_VARS_ARRAY+=("$ref")
-            done
+            echo "📦 Agregando secretos de Key Vault a env vars..."
+            # SECRET_ENV_REFS viene como: "DATABASE_URL=secretref:db-url DATABASE_USER=secretref:db-user ..."
+            ENV_VARS_CMD="${ENV_VARS_CMD} ${SECRET_ENV_REFS}"
+            echo "Env vars completas: $ENV_VARS_CMD"
           fi
 
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
@@ -374,7 +369,7 @@ jobs:
               --system-assigned \
               --cpu "$CPU" --memory "$MEM" \
               --min-replicas "$MIN" --max-replicas "$MAX" \
-              --env-vars "${ENV_VARS_ARRAY[@]}"
+              --env-vars "$ENV_VARS_CMD"
           else
             echo "🔄 Actualizando Container App..."
             az containerapp update \
@@ -382,7 +377,7 @@ jobs:
               --image "$IMG" \
               --cpu "$CPU" --memory "$MEM" \
               --min-replicas "$MIN" --max-replicas "$MAX" \
-              --set-env-vars "${ENV_VARS_ARRAY[@]}"
+              --replace-env-vars "$ENV_VARS_CMD"
           fi
 
       - name: BE internal FQDN (verificación)
