@@ -317,17 +317,23 @@ jobs:
             exit 0
           fi
 
+          # Verificar si el app existe
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
-            echo "ℹ️ App no existe aún, se registrarán secretos después del create"
+            echo "ℹ️ App no existe aún, se registrarán secretos durante el create"
             exit 0
           fi
 
-          echo "📦 Registrando secretos de Key Vault en Container App..."
+          echo "📦 Registrando/actualizando secretos de Key Vault en Container App..."
 
-          # Registrar secretos (az containerapp secret set)
+          # Registrar secretos (az containerapp secret set reemplaza si ya existen)
           eval "az containerapp secret set -g \"$RG\" -n \"$APP\" --secrets $KV_SECRETS_ARGS"
 
-          echo "✅ Secretos registrados"
+          echo "✅ Secretos registrados/actualizados"
+
+          # Listar para verificar
+          echo ""
+          echo "📋 Secretos actualmente registrados:"
+          az containerapp secret list -g "$RG" -n "$APP" -o table
 
       - name: Create/Update BE (ACA)
         env:
@@ -346,16 +352,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Construir comando de env vars
-          ENV_VARS_CMD="APP_ENV=${APP_ENV} PORT=${TARGET_PORT} NODE_ENV=production LOG_LEVEL=info"
+          # Crear archivo temporal con env vars
+          cat > /tmp/container-envvars.txt <<ENVEOF
+          APP_ENV=${APP_ENV}
+          PORT=${TARGET_PORT}
+          NODE_ENV=production
+          LOG_LEVEL=info
+          ENVEOF
 
           # Agregar secret refs de KV si existen
           if [[ -n "${SECRET_ENV_REFS:-}" ]]; then
-            echo "📦 Agregando secretos de Key Vault a env vars..."
+            echo "📦 Agregando secretos de Key Vault..."
             # SECRET_ENV_REFS viene como: "DATABASE_URL=secretref:db-url DATABASE_USER=secretref:db-user ..."
-            ENV_VARS_CMD="${ENV_VARS_CMD} ${SECRET_ENV_REFS}"
-            echo "Env vars completas: $ENV_VARS_CMD"
+            echo "$SECRET_ENV_REFS" | tr ' ' '\n' >> /tmp/container-envvars.txt
+            echo "✅ Secretos agregados"
           fi
+
+          # Mostrar configuración final (debug)
+          echo "📋 Env vars a configurar:"
+          cat /tmp/container-envvars.txt
+          echo ""
+
+          # Convertir archivo a argumentos separados por espacios
+          ENV_VARS_ARGS=$(cat /tmp/container-envvars.txt | tr '\n' ' ')
 
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
             echo "🆕 Creando Container App..."
@@ -369,7 +388,7 @@ jobs:
               --system-assigned \
               --cpu "$CPU" --memory "$MEM" \
               --min-replicas "$MIN" --max-replicas "$MAX" \
-              --env-vars "$ENV_VARS_CMD"
+              --env-vars $ENV_VARS_ARGS
           else
             echo "🔄 Actualizando Container App..."
             az containerapp update \
@@ -377,8 +396,18 @@ jobs:
               --image "$IMG" \
               --cpu "$CPU" --memory "$MEM" \
               --min-replicas "$MIN" --max-replicas "$MAX" \
-              --replace-env-vars "$ENV_VARS_CMD"
+              --replace-env-vars $ENV_VARS_ARGS
           fi
+
+          # Cleanup
+          rm -f /tmp/container-envvars.txt
+
+          # Verificar configuración aplicada
+          echo ""
+          echo "✅ Verificando env vars aplicadas:"
+          az containerapp show -g "$RG" -n "$APP" \
+            --query "properties.template.containers[0].env[].{name:name, value:value, secretRef:secretRef}" \
+            -o table
 
       - name: BE internal FQDN (verificación)
         shell: bash
