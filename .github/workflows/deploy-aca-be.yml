@@ -367,13 +367,13 @@ jobs:
 
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
             echo "🆕 Creando Container App..."
-            
+
             # Leer archivo y construir comando
             ARGS=()
             while IFS= read -r line; do
               [[ -n "$line" ]] && ARGS+=("$line")
             done < /tmp/env_vars.txt
-            
+
             az containerapp create \
               -g "$RG" -n "$APP" \
               --environment "$ACA_ENV" \
@@ -387,13 +387,13 @@ jobs:
               --env-vars "${ARGS[@]}"
           else
             echo "🔄 Actualizando Container App..."
-            
+
             # Leer archivo y construir comando
             ARGS=()
             while IFS= read -r line; do
               [[ -n "$line" ]] && ARGS+=("$line")
             done < /tmp/env_vars.txt
-            
+
             az containerapp update \
               -g "$RG" -n "$APP" \
               --image "$IMG" \
