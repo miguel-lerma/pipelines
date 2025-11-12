@@ -352,34 +352,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Construir args de env vars (uno por línea para evitar problemas de parsing)
-          ENV_VARS_ARGS="APP_ENV=${APP_ENV}"$'\n'
-          ENV_VARS_ARGS+="PORT=${TARGET_PORT}"$'\n'
-          ENV_VARS_ARGS+="NODE_ENV=production"$'\n'
-          ENV_VARS_ARGS+="LOG_LEVEL=info"
+          # Construir comando base con env vars
+          CMD_BASE=(
+            "APP_ENV=${APP_ENV}"
+            "PORT=${TARGET_PORT}"
+            "NODE_ENV=production"
+            "LOG_LEVEL=info"
+          )
 
           # Agregar secret refs de KV si existen
           if [[ -n "${SECRET_ENV_REFS:-}" ]]; then
             echo "📦 Agregando secretos de Key Vault a env vars..."
             # SECRET_ENV_REFS viene como: "DATABASE_URL=secretref:db-url DATABASE_USER=secretref:db-user ..."
-            for ref in $SECRET_ENV_REFS; do
-              ENV_VARS_ARGS+=$'\n'"${ref}"
-            done
-            echo "✅ Total env vars configuradas: $(echo "$ENV_VARS_ARGS" | wc -l)"
+            # Convertir a array
+            read -ra SECRET_REFS_ARRAY <<< "$SECRET_ENV_REFS"
+            CMD_BASE+=("${SECRET_REFS_ARRAY[@]}")
+            echo "✅ Total env vars configuradas: ${#CMD_BASE[@]}"
           fi
-
-          # Guardar en archivo temporal para evitar problemas de escape
-          echo "$ENV_VARS_ARGS" > /tmp/env_vars.txt
 
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
             echo "🆕 Creando Container App..."
-
-            # Leer archivo y construir comando
-            ARGS=()
-            while IFS= read -r line; do
-              [[ -n "$line" ]] && ARGS+=("$line")
-            done < /tmp/env_vars.txt
-
             az containerapp create \
               -g "$RG" -n "$APP" \
               --environment "$ACA_ENV" \
@@ -390,25 +382,16 @@ jobs:
               --system-assigned \
               --cpu "$CPU" --memory "$MEM" \
               --min-replicas "$MIN" --max-replicas "$MAX" \
-              --env-vars "${ARGS[@]}"
+              --env-vars "${CMD_BASE[@]}"
           else
             echo "🔄 Actualizando Container App..."
-
-            # Leer archivo y construir comando
-            ARGS=()
-            while IFS= read -r line; do
-              [[ -n "$line" ]] && ARGS+=("$line")
-            done < /tmp/env_vars.txt
-
             az containerapp update \
               -g "$RG" -n "$APP" \
               --image "$IMG" \
               --cpu "$CPU" --memory "$MEM" \
               --min-replicas "$MIN" --max-replicas "$MAX" \
-              --replace-env-vars "${ARGS[@]}"
+              --replace-env-vars "${CMD_BASE[@]}"
           fi
-
-          rm -f /tmp/env_vars.txt
 
       - name: BE internal FQDN (verificación)
         shell: bash
