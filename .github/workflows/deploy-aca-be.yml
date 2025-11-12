@@ -352,23 +352,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Construir comando base con env vars
-          CMD_BASE=(
-            "APP_ENV=${APP_ENV}"
-            "PORT=${TARGET_PORT}"
-            "NODE_ENV=production"
-            "LOG_LEVEL=info"
-          )
+          # Crear archivo temporal con env vars
+          cat > /tmp/container-envvars.txt <<ENVEOF
+          APP_ENV=${APP_ENV}
+          PORT=${TARGET_PORT}
+          NODE_ENV=production
+          LOG_LEVEL=info
+          ENVEOF
 
           # Agregar secret refs de KV si existen
           if [[ -n "${SECRET_ENV_REFS:-}" ]]; then
-            echo "📦 Agregando secretos de Key Vault a env vars..."
+            echo "📦 Agregando secretos de Key Vault..."
             # SECRET_ENV_REFS viene como: "DATABASE_URL=secretref:db-url DATABASE_USER=secretref:db-user ..."
-            # Convertir a array
-            read -ra SECRET_REFS_ARRAY <<< "$SECRET_ENV_REFS"
-            CMD_BASE+=("${SECRET_REFS_ARRAY[@]}")
-            echo "✅ Total env vars configuradas: ${#CMD_BASE[@]}"
+            echo "$SECRET_ENV_REFS" | tr ' ' '\n' >> /tmp/container-envvars.txt
+            echo "✅ Secretos agregados"
           fi
+
+          # Mostrar configuración final (debug)
+          echo "📋 Env vars a configurar:"
+          cat /tmp/container-envvars.txt
+          echo ""
+
+          # Convertir archivo a argumentos separados por espacios
+          ENV_VARS_ARGS=$(cat /tmp/container-envvars.txt | tr '\n' ' ')
 
           if ! az containerapp show -g "$RG" -n "$APP" >/dev/null 2>&1; then
             echo "🆕 Creando Container App..."
@@ -382,7 +388,7 @@ jobs:
               --system-assigned \
               --cpu "$CPU" --memory "$MEM" \
               --min-replicas "$MIN" --max-replicas "$MAX" \
-              --env-vars "${CMD_BASE[@]}"
+              --env-vars $ENV_VARS_ARGS
           else
             echo "🔄 Actualizando Container App..."
             az containerapp update \
@@ -390,8 +396,18 @@ jobs:
               --image "$IMG" \
               --cpu "$CPU" --memory "$MEM" \
               --min-replicas "$MIN" --max-replicas "$MAX" \
-              --replace-env-vars "${CMD_BASE[@]}"
+              --replace-env-vars $ENV_VARS_ARGS
           fi
+
+          # Cleanup
+          rm -f /tmp/container-envvars.txt
+
+          # Verificar configuración aplicada
+          echo ""
+          echo "✅ Verificando env vars aplicadas:"
+          az containerapp show -g "$RG" -n "$APP" \
+            --query "properties.template.containers[0].env[].{name:name, value:value, secretRef:secretRef}" \
+            -o table
 
       - name: BE internal FQDN (verificación)
         shell: bash
